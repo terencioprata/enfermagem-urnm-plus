@@ -49,7 +49,7 @@ export default function App() {
           <Link to="/blog" className="inline-flex items-center gap-3 bg-white/90 hover:bg-white/95 text-brandBlue font-semibold px-6 py-3 rounded-xl shadow transition">
             Ler o Blog
           </Link>
-          <a href="https://wa.me/2449XXXXXXXX" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-3 bg-green-500 hover:bg-green-600 text-white font-semibold px-6 py-3 rounded-xl shadow transition">
+          <a href="https://wa.me/244921639010" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-3 bg-green-500 hover:bg-green-600 text-white font-semibold px-6 py-3 rounded-xl shadow transition">
             <FaWhatsapp /> Contactar (WhatsApp)
           </a>
         </div>
@@ -110,7 +110,7 @@ export default function App() {
             <div>
               <h4 className="text-xl font-bold text-white mb-2">Formação prática intensiva — Gelados Gourmet (Exemplo)</h4>
               <p className="text-white/85 mb-3">Sessão intensiva de 1 dia — materiais, kit empreendedor e certificado opcional.</p>
-              <a href="https://wa.me/2449XXXXXXXX" target="_blank" rel="noreferrer" className="inline-block bg-orange-500 hover:bg-orange-600 text-white px-5 py-3 rounded-lg font-semibold transition">
+              <a href="https://wa.me/244921639010" target="_blank" rel="noreferrer" className="inline-block bg-orange-500 hover:bg-orange-600 text-white px-5 py-3 rounded-lg font-semibold transition">
                 Reservar via WhatsApp
               </a>
             </div>
