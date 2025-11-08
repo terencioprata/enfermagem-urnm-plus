@@ -10,8 +10,8 @@ import Simulados from "./pages/Simulados.jsx";
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>
-    {/* basename ajustado para o repositório */}
-    <BrowserRouter basename="/enfermagem-urnm-plus/">
+    {/* Ajuste para GitHub Pages */}
+    <BrowserRouter basename="/enfermagem-urnm-plus">
       <Routes>
         <Route path="/" element={<App />} />
         <Route path="/blog" element={<Blog />} />

@@ -2,6 +2,8 @@ import { motion } from "framer-motion";
 import { FaInstagram, FaFacebook, FaLinkedin, FaWhatsapp } from "react-icons/fa";
 import Layout from "./components/Layout";
 import { Link } from "react-router-dom";
+import NewsletterForm from "./components/NewsletterForm";
+
 
 /* Conteúdos e dados (podes editar) */
 const blogPosts = [
@@ -114,7 +116,7 @@ export default function App() {
                 Reservar via WhatsApp
               </a>
             </div>
-            <img src="https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=600&q=60" alt="promo" className="w-40 h-28 object-cover rounded-xl shadow-md"/>
+            <img src="https://i.ibb.co/jZMb7TJ2/gelados-gourmet.jpg" alt="promo" className="w-40 h-28 object-cover rounded-xl shadow-md"/>
           </div>
         </motion.div>
       </section>
@@ -145,15 +147,19 @@ export default function App() {
         </div>
       </section>
 
-      {/* NEWSLETTER (front-end) */}
-      <section className="max-w-3xl mx-auto px-6 py-8 text-center">
-        <h4 className="text-xl font-bold text-white mb-3">Receba novidades por email</h4>
-        <p className="text-white/85 mb-4">Inscreve-te para receber avisos sobre novos simulados e formações.</p>
-        <form onSubmit={(e)=>{ e.preventDefault(); alert('Obrigado — funcionalidade a integrar no backend'); }} className="flex flex-col sm:flex-row gap-3 justify-center">
-          <input aria-label="email" type="email" placeholder="teuemail@exemplo.com" className="px-4 py-3 rounded-lg w-full sm:w-auto min-w-[220px]" />
-          <button type="submit" className="bg-brandGreen hover:bg-brandGreen/90 text-white px-6 py-3 rounded-lg font-semibold">Inscrever</button>
-        </form>
-      </section>
+{/* NEWSLETTER (componente separado e funcional) */}
+<section className="max-w-3xl mx-auto px-6 py-8 text-center">
+  <h4 className="text-xl font-bold text-white mb-3">
+    Receba novidades por email
+  </h4>
+  <p className="text-white/85 mb-4">
+    Inscreve-te para receber avisos sobre novos simulados e formações.
+  </p>
+
+  {/* Componente funcional de subscrição */}
+  <NewsletterForm />
+</section>
+
 
       {/* ROLAPÉ (footer) */}
       <footer className="mt-12 border-t border-white/10 py-6 text-sm text-white/80">
@@ -164,10 +170,10 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-4">
-            <a href="https://instagram.com" target="_blank" rel="noreferrer" className="text-white/90"><FaInstagram /></a>
-            <a href="https://facebook.com" target="_blank" rel="noreferrer" className="text-white/90"><FaFacebook /></a>
-            <a href="https://linkedin.com" target="_blank" rel="noreferrer" className="text-white/90"><FaLinkedin /></a>
-            <a href="https://wa.me/2449XXXXXXXX" target="_blank" rel="noreferrer" className="text-white/90"><FaWhatsapp /></a>
+            <a href="https://www.instagram.com/launchbox01" target="_blank" rel="noreferrer" className="text-white/90"><FaInstagram /></a>
+            <a href="https://web.facebook.com/terencioprataoficial" target="_blank" rel="noreferrer" className="text-white/90"><FaFacebook /></a>
+            <a href="https://www.linkedin.com/in/ter%C3%AAncio-prata-67330118a/" target="_blank" rel="noreferrer" className="text-white/90"><FaLinkedin /></a>
+            <a href="https://wa.me/244921639010" target="_blank" rel="noreferrer" className="text-white/90"><FaWhatsapp /></a>
           </div>
         </div>
 
