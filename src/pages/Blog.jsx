@@ -1,7 +1,6 @@
 // src/pages/Blog.jsx
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { posts as localPosts } from "../data/posts";
 import { supabase } from "../supabaseClient";
 import { motion } from "framer-motion";
 import Layout from "../components/Layout";
@@ -23,7 +22,20 @@ export default function Blog() {
           .order("created_at", { ascending: false });
 
         if (error) throw error;
-        if (mounted) setRemotePosts(data || []);
+
+        // Normalizar URLs das imagens
+        const withImages = await Promise.all(
+          (data || []).map(async (p) => {
+            let image = p.image_url || p.image || "https://via.placeholder.com/800x400?text=Sem+Imagem";
+            if (image && image.startsWith("posts/")) {
+              const res = supabase.storage.from("posts").getPublicUrl(image);
+              image = res?.data?.publicUrl || image;
+            }
+            return { ...p, image };
+          })
+        );
+
+        if (mounted) setRemotePosts(withImages);
       } catch (err) {
         console.error("Erro ao buscar posts:", err);
         if (mounted) setRemotePosts([]);
@@ -36,35 +48,17 @@ export default function Blog() {
   }, []);
 
   const allPosts = useMemo(() => {
-    const normalizeRemote = (p) => ({
+    // Apenas posts remotos (Supabase)
+    return (remotePosts || []).map((p) => ({
       id: p.id,
       title: p.title,
       excerpt: p.excerpt,
       content: p.content,
-      image: p.image_url || p.image || "https://via.placeholder.com/800x400?text=Sem+Imagem",
+      image: p.image,
       date: p.created_at || p.date,
       featured: !!p.featured,
       source: "remote",
-    });
-    const normalizeLocal = (p) => ({
-      id: p.id,
-      title: p.title,
-      excerpt: p.excerpt,
-      content: p.content,
-      image: p.image || "https://via.placeholder.com/800x400?text=Sem+Imagem",
-      date: p.date,
-      featured: !!p.featured,
-      source: "local",
-    });
-
-    const remote = (remotePosts || []).map(normalizeRemote);
-    const local = (localPosts || []).map(normalizeLocal);
-
-    const map = new Map();
-    remote.forEach((r) => map.set(`remote-${r.id}`, r));
-    local.forEach((l) => map.set(`local-${l.id}`, l));
-
-    return Array.from(map.values());
+    }));
   }, [remotePosts]);
 
   const filtered = useMemo(() => {
@@ -114,7 +108,7 @@ export default function Blog() {
 
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-8">
             {paginated.map((post) => {
-              const path = `${post.source}-${post.id}`;
+              const path = `remote-${post.id}`;
               return (
                 <motion.article
                   key={path}
