@@ -1,426 +1,928 @@
 // src/pages/Simulados.jsx
-import { useEffect, useMemo, useRef, useState } from "react";
-import { motion } from "framer-motion";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "../supabaseClient";
 import Layout from "../components/Layout";
 import { Link } from "react-router-dom";
 
 /**
- * Simulados page + exam runner.
- *
- * Requisitos:
- * - supabase table "simulados" deve ter ao menos: id, title, description, questions (JSON), created_at
- *   questions: array of { id, type: "mcq" | "open", question, choices?: string[], correct?: index or value, points?: number }
- * - supabase table "attempts" should exist and accept: simulado_id, user_name, user_email, score, answers (json), created_at
- *
- * Behavior:
- * - list view: mostra cartões com resumo e botão "Iniciar".
- * - start: pede nome/email (opcional mas recomendado), carrega as perguntas e começa o cronómetro.
- * - ao terminar, calcula pontuação (somando pontos de questões de múltipla escolha; perguntas abertas ficam como 0 por default),
- *   grava registro em attempts e mostra resumo com nota 0–20.
+ * Simulados page + exam runner - Versão melhorada
+ * 
+ * Melhorias implementadas:
+ * - Melhor gestão de estado com useCallback e useMemo
+ * - Tratamento robusto de erros
+ * - Loading states mais claros
+ * - Validação de dados aprimorada
+ * - Modal para nome/email em vez de prompt
+ * - Animações suaves
+ * - Código mais limpo e organizado
  */
 
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+const DEFAULT_DURATION_SEC = 20 * 60; // 20 minutes
+const VIEWS = {
+  LIST: "list",
+  USER_INFO: "userInfo",
+  EXAM: "exam",
+  RESULT: "result"
+};
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+const parseQuestions = (questionsData) => {
+  try {
+    let qs = questionsData || [];
+    if (typeof qs === "string") {
+      qs = JSON.parse(qs);
+    }
+    
+    return (Array.isArray(qs) ? qs : []).map((q, i) => ({
+      id: q.id ?? `q_${i + 1}`,
+      type: q.type ?? "mcq",
+      question: q.question ?? "",
+      choices: Array.isArray(q.choices) ? q.choices : [],
+      correct: q.correct ?? null,
+      points: typeof q.points === "number" ? q.points : 1,
+    }));
+  } catch (e) {
+    console.error("Erro ao fazer parse das questões:", e);
+    return [];
+  }
+};
+
+const formatTime = (seconds) => {
+  if (!seconds || seconds < 0) return "00:00";
+  const mm = String(Math.floor(seconds / 60)).padStart(2, "0");
+  const ss = String(seconds % 60).padStart(2, "0");
+  return `${mm}:${ss}`;
+};
+
+const calculateScore = (questions, answers) => {
+  if (!questions?.length) return 0;
+  
+  let totalPoints = 0;
+  let earnedPoints = 0;
+  
+  for (const q of questions) {
+    const points = Number(q.points ?? 1);
+    totalPoints += points;
+    
+    if (q.type === "mcq") {
+      const givenAnswer = answers[q.id];
+      if (givenAnswer === undefined || givenAnswer === null) continue;
+      
+      const isCorrect = typeof q.correct === "number"
+        ? Number(givenAnswer) === Number(q.correct)
+        : String(givenAnswer).trim() === String(q.correct).trim();
+      
+      if (isCorrect) earnedPoints += points;
+    }
+    // Open questions: not auto-graded (could be graded manually later)
+  }
+  
+  if (totalPoints === 0) return 0;
+  const score = (earnedPoints / totalPoints) * 20;
+  return Math.round(score * 100) / 100;
+};
+
+const getWhatsAppLink = () => "https://wa.me/244921639010";
+
+const shouldShowReserveButton = (simulado) => {
+  const text = `${simulado?.title || ""} ${simulado?.description || ""}`.toLowerCase();
+  return /(curso|formação|formacao|inscrição|inscricao|venda|comprar|workshop)/i.test(text);
+};
+
+// ============================================================================
+// MAIN COMPONENT
+// ============================================================================
+
 export default function Simulados() {
+  // State management
   const [simulados, setSimulados] = useState([]);
-  const [loadingList, setLoadingList] = useState(true);
-  const [view, setView] = useState("list"); // 'list' | 'exam' | 'result'
+  const [loading, setLoading] = useState({ list: true, saving: false });
+  const [error, setError] = useState(null);
+  const [view, setView] = useState(VIEWS.LIST);
+  
+  // Exam state
   const [currentSimulado, setCurrentSimulado] = useState(null);
   const [questions, setQuestions] = useState([]);
-  const [answers, setAnswers] = useState({}); // { questionId: answerIndexOrText }
+  const [answers, setAnswers] = useState({});
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(null); // seconds
-  const timerRef = useRef(null);
+  const [timeLeft, setTimeLeft] = useState(null);
+  
+  // User info
   const [userName, setUserName] = useState("");
   const [userEmail, setUserEmail] = useState("");
+  
+  // Result
   const [attemptResult, setAttemptResult] = useState(null);
-  const [savingAttempt, setSavingAttempt] = useState(false);
+  
+  // Refs
+  const timerRef = useRef(null);
 
-  // Config: default duration per simulado (in seconds) if simulado doesn't specify total_time
-  const DEFAULT_DURATION_SEC = 20 * 60; // 20 minutes
-
+  // ============================================================================
+  // EFFECTS
+  // ============================================================================
+  
   useEffect(() => {
     loadSimulados();
   }, []);
 
-  async function loadSimulados() {
-    setLoadingList(true);
-    try {
-      const { data, error } = await supabase
-        .from("simulados")
-        .select("*")
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      setSimulados(data || []);
-    } catch (err) {
-      console.error("Erro ao carregar simulados:", err);
-      setSimulados([]);
-    } finally {
-      setLoadingList(false);
-    }
-  }
-
-  // Start a simulado: fetch questions (if stored in JSON field 'questions') and initialize state
-  async function startSimulado(sim) {
-    try {
-      // If sim.questions stored as JSON string, parse; else assume object/array already.
-      let qs = sim.questions || [];
-      if (typeof qs === "string") {
-        try { qs = JSON.parse(qs); } catch (e) { qs = []; }
-      }
-
-      // Normalize questions: ensure each has id, type, points (defaults)
-      qs = (qs || []).map((q, i) => ({
-        id: q.id ?? i + 1,
-        type: q.type ?? "mcq",
-        question: q.question ?? "",
-        choices: q.choices ?? [],
-        correct: q.correct ?? null,
-        points: typeof q.points === "number" ? q.points : 1,
-      }));
-
-      setCurrentSimulado(sim);
-      setQuestions(qs);
-      setAnswers({});
-      setCurrentIndex(0);
-
-      // Time: prefer sim.total_time_seconds or sim.time_seconds or default
-      const total = Number(sim.total_time_seconds ?? sim.time_seconds ?? DEFAULT_DURATION_SEC) || DEFAULT_DURATION_SEC;
-      setTimeLeft(total);
-
-      setView("exam");
-
-      // start timer
-      if (timerRef.current) clearInterval(timerRef.current);
-      timerRef.current = setInterval(() => {
-        setTimeLeft((t) => {
-          if (t <= 1) {
-            clearInterval(timerRef.current);
-            finishExam(); // auto finish
-            return 0;
-          }
-          return t - 1;
-        });
-      }, 1000);
-    } catch (err) {
-      console.error(err);
-      alert("Erro ao iniciar o simulado.");
-    }
-  }
-
-  // stop timer on unmount
+  // Cleanup timer on unmount
   useEffect(() => {
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
     };
   }, []);
 
-  function formatTime(sec) {
-    const mm = String(Math.floor(sec / 60)).padStart(2, "0");
-    const ss = String(sec % 60).padStart(2, "0");
-    return `${mm}:${ss}`;
-  }
-
-  function answerQuestion(qId, value) {
-    setAnswers((a) => ({ ...a, [qId]: value }));
-  }
-
-  function goNext() {
-    if (currentIndex < questions.length - 1) setCurrentIndex((i) => i + 1);
-  }
-  function goPrev() {
-    if (currentIndex > 0) setCurrentIndex((i) => i - 1);
-  }
-
-  // Score calculation: compute sum points, scale to 0-20
-  function calculateScore(qs = questions, ans = answers) {
-    if (!qs.length) return 0;
-    let totalPoints = 0;
-    let earned = 0;
-    for (const q of qs) {
-      totalPoints += Number(q.points ?? 1);
-      if (q.type === "mcq") {
-        // assume q.correct is index or value
-        const given = ans[q.id];
-        if (given === undefined || given === null) continue;
-        if (typeof q.correct === "number") {
-          if (Number(given) === Number(q.correct)) earned += Number(q.points ?? 1);
-        } else {
-          // compare string values
-          if (String(given).trim() === String(q.correct).trim()) earned += Number(q.points ?? 1);
-        }
-      } else {
-        // open question: not auto-graded — give 0 (could be graded later)
-      }
-    }
-    // Avoid division by zero
-    if (totalPoints === 0) return 0;
-    const raw = (earned / totalPoints) * 20; // scale to 0-20
-    return Math.round(raw * 100) / 100; // two decimals
-  }
-
-  // Save attempt to Supabase
-  async function saveAttempt(sim, usrName, usrEmail, qs, ans, score) {
+  // ============================================================================
+  // API FUNCTIONS
+  // ============================================================================
+  
+  const loadSimulados = useCallback(async () => {
+    setLoading(prev => ({ ...prev, list: true }));
+    setError(null);
+    
     try {
-      setSavingAttempt(true);
+      const { data, error: supabaseError } = await supabase
+        .from("simulados")
+        .select("*")
+        .order("created_at", { ascending: false });
+      
+      if (supabaseError) throw supabaseError;
+      
+      setSimulados(data || []);
+    } catch (err) {
+      console.error("Erro ao carregar simulados:", err);
+      setError("Não foi possível carregar os simulados. Por favor, tenta novamente.");
+      setSimulados([]);
+    } finally {
+      setLoading(prev => ({ ...prev, list: false }));
+    }
+  }, []);
+
+  const saveAttempt = useCallback(async (simulado, userName, userEmail, questions, answers, score) => {
+    try {
+      setLoading(prev => ({ ...prev, saving: true }));
+      
       const payload = {
-        simulado_id: sim.id,
-        user_name: usrName || null,
-        user_email: usrEmail || null,
+        simulado_id: simulado.id,
+        user_name: userName || null,
+        user_email: userEmail || null,
         score,
-        answers: ans,
+        answers: answers,
+        completed_at: new Date().toISOString()
       };
-      const { data, error } = await supabase.from("attempts").insert([payload]).select().single();
+      
+      const { data, error } = await supabase
+        .from("attempts")
+        .insert([payload])
+        .select()
+        .single();
+      
       if (error) throw error;
+      
       return data;
     } catch (err) {
       console.error("Erro ao gravar tentativa:", err);
+      // Don't throw - we still want to show results even if save fails
       return null;
     } finally {
-      setSavingAttempt(false);
+      setLoading(prev => ({ ...prev, saving: false }));
     }
-  }
+  }, []);
 
-  // Finish exam: compute score, save attempt, show result
-  async function finishExam() {
-    if (!currentSimulado) return;
+  // ============================================================================
+  // EXAM CONTROL FUNCTIONS
+  // ============================================================================
+  
+  const startTimer = useCallback((duration) => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+    
+    setTimeLeft(duration);
+    
+    timerRef.current = setInterval(() => {
+      setTimeLeft((prevTime) => {
+        if (prevTime <= 1) {
+          clearInterval(timerRef.current);
+          finishExam(true); // Auto-finish when time runs out
+          return 0;
+        }
+        return prevTime - 1;
+      });
+    }, 1000);
+  }, []);
+
+  const startSimulado = useCallback((simulado) => {
+    try {
+      const parsedQuestions = parseQuestions(simulado.questions);
+      
+      if (!parsedQuestions.length) {
+        alert("Este simulado não possui questões válidas.");
+        return;
+      }
+      
+      setCurrentSimulado(simulado);
+      setQuestions(parsedQuestions);
+      setAnswers({});
+      setCurrentIndex(0);
+      setAttemptResult(null);
+      
+      const duration = Number(
+        simulado.total_time_seconds ?? 
+        simulado.time_seconds ?? 
+        DEFAULT_DURATION_SEC
+      ) || DEFAULT_DURATION_SEC;
+      
+      setView(VIEWS.EXAM);
+      startTimer(duration);
+    } catch (err) {
+      console.error("Erro ao iniciar simulado:", err);
+      alert("Erro ao iniciar o simulado. Por favor, tenta novamente.");
+    }
+  }, [startTimer]);
+
+  const finishExam = useCallback(async (autoFinish = false) => {
+    if (!currentSimulado || !questions.length) return;
+    
+    // Stop timer
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
+    
+    // Calculate score
     const score = calculateScore(questions, answers);
-    const saved = await saveAttempt(currentSimulado, userName, userEmail, questions, answers, score);
-    setAttemptResult({ score, saved });
-    setView("result");
-  }
+    
+    // Save attempt
+    const savedAttempt = await saveAttempt(
+      currentSimulado,
+      userName,
+      userEmail,
+      questions,
+      answers,
+      score
+    );
+    
+    // Show result
+    setAttemptResult({
+      score,
+      saved: savedAttempt,
+      autoFinish
+    });
+    
+    setView(VIEWS.RESULT);
+  }, [currentSimulado, questions, answers, userName, userEmail, saveAttempt]);
 
-  function abortExam() {
-    if (!confirm("Deseja abandonar o simulado? Progresso será perdido.")) return;
-    if (timerRef.current) clearInterval(timerRef.current);
-    setView("list");
+  const abortExam = useCallback(() => {
+    const confirmed = window.confirm(
+      "Deseja abandonar o simulado? O teu progresso será perdido."
+    );
+    
+    if (!confirmed) return;
+    
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+    
+    resetExamState();
+    setView(VIEWS.LIST);
+  }, []);
+
+  const resetExamState = useCallback(() => {
     setCurrentSimulado(null);
     setQuestions([]);
     setAnswers({});
     setCurrentIndex(0);
     setTimeLeft(null);
-  }
+    setAttemptResult(null);
+  }, []);
 
-  // UI: exam card for a question
-  function QuestionCard({ q, idx }) {
+  // ============================================================================
+  // NAVIGATION & ANSWER FUNCTIONS
+  // ============================================================================
+  
+  const answerQuestion = useCallback((questionId, value) => {
+    setAnswers(prev => ({ ...prev, [questionId]: value }));
+  }, []);
+
+  const goToQuestion = useCallback((index) => {
+    if (index >= 0 && index < questions.length) {
+      setCurrentIndex(index);
+    }
+  }, [questions.length]);
+
+  const goNext = useCallback(() => {
+    if (currentIndex < questions.length - 1) {
+      setCurrentIndex(prev => prev + 1);
+    }
+  }, [currentIndex, questions.length]);
+
+  const goPrev = useCallback(() => {
+    if (currentIndex > 0) {
+      setCurrentIndex(prev => prev - 1);
+    }
+  }, [currentIndex]);
+
+  // ============================================================================
+  // COMPUTED VALUES
+  // ============================================================================
+  
+  const answeredCount = useMemo(() => {
+    return Object.entries(answers).filter(([_, value]) => {
+      return value !== undefined && value !== null && value !== "";
+    }).length;
+  }, [answers]);
+
+  const progressPercentage = useMemo(() => {
+    if (!questions.length) return 0;
+    return Math.round((answeredCount / questions.length) * 100);
+  }, [answeredCount, questions.length]);
+
+  // ============================================================================
+  // RENDER FUNCTIONS
+  // ============================================================================
+  
+  const renderSimuladoCard = useCallback((simulado) => {
+    const questionCount = parseQuestions(simulado.questions).length;
+    const duration = Number(
+      simulado.total_time_seconds ?? 
+      simulado.time_seconds ?? 
+      DEFAULT_DURATION_SEC
+    );
+    const durationMinutes = Math.round(duration / 60);
+    
     return (
-      <div className="bg-white/5 p-6 rounded-lg">
-        <div className="mb-3 text-sm text-gray-300">Questão {idx + 1} de {questions.length}</div>
-        <div className="mb-4 text-lg font-semibold">{q.question}</div>
+      <motion.div
+        key={simulado.id}
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+        className="bg-white/5 backdrop-blur-sm p-6 rounded-2xl shadow-xl hover:shadow-2xl transition-all duration-300 flex flex-col justify-between border border-white/10"
+      >
+        <div>
+          <h3 className="text-xl font-semibold mb-3 text-white">
+            {simulado.title}
+          </h3>
+          <p className="text-sm text-white/70 mb-4 line-clamp-3">
+            {simulado.description || simulado.excerpt || "Sem descrição disponível"}
+          </p>
+          
+          <div className="flex items-center gap-4 text-sm text-white/60 mb-4">
+            <div className="flex items-center gap-2">
+              <span>📝</span>
+              <span>{questionCount} questão{questionCount !== 1 ? "ões" : ""}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span>⏱️</span>
+              <span>{durationMinutes} min</span>
+            </div>
+          </div>
+        </div>
 
-        {q.type === "mcq" && (
+        <div className="flex gap-3 mt-4">
+          <button
+            onClick={() => {
+              setCurrentSimulado(simulado);
+              setView(VIEWS.USER_INFO);
+            }}
+            className="flex-1 bg-brandBlue hover:bg-brandBlue/90 px-4 py-3 rounded-lg font-semibold transition-all duration-200 transform hover:scale-105"
+          >
+            Iniciar Simulado
+          </button>
+
+          <Link
+            to={`/simulados/${simulado.id}`}
+            target="_blank"
+            rel="noreferrer"
+            className="px-4 py-3 rounded-lg border border-white/20 hover:bg-white/5 transition-all duration-200 flex items-center justify-center"
+            title="Ver detalhes"
+          >
+            ℹ️
+          </Link>
+        </div>
+      </motion.div>
+    );
+  }, []);
+
+  const renderQuestionCard = useCallback((question, index) => {
+    const currentAnswer = answers[question.id];
+    
+    return (
+      <motion.div
+        key={question.id}
+        initial={{ opacity: 0, x: 20 }}
+        animate={{ opacity: 1, x: 0 }}
+        exit={{ opacity: 0, x: -20 }}
+        className="bg-white/5 backdrop-blur-sm p-6 rounded-2xl border border-white/10"
+      >
+        <div className="mb-4">
+          <div className="text-sm text-white/60 mb-2">
+            Questão {index + 1} de {questions.length}
+          </div>
+          <h3 className="text-lg font-semibold text-white leading-relaxed">
+            {question.question}
+          </h3>
+        </div>
+
+        {question.type === "mcq" && (
           <div className="grid gap-3">
-            {q.choices.map((c, i) => {
-              const value = i;
-              const checked = answers[q.id] === value;
+            {question.choices.map((choice, choiceIndex) => {
+              const isSelected = currentAnswer === choiceIndex;
+              
               return (
-                <label key={i} className={`block p-3 rounded-lg cursor-pointer transition ${checked ? "bg-brandGreen text-black" : "bg-white/3 text-white"}`}>
+                <label
+                  key={choiceIndex}
+                  className={`
+                    block p-4 rounded-lg cursor-pointer transition-all duration-200
+                    ${isSelected 
+                      ? "bg-brandGreen text-black font-semibold shadow-lg scale-105" 
+                      : "bg-white/5 text-white hover:bg-white/10"
+                    }
+                  `}
+                >
                   <input
                     type="radio"
-                    name={`q-${q.id}`}
-                    value={value}
-                    checked={checked}
-                    onChange={() => answerQuestion(q.id, value)}
-                    className="mr-2"
+                    name={`question-${question.id}`}
+                    value={choiceIndex}
+                    checked={isSelected}
+                    onChange={() => answerQuestion(question.id, choiceIndex)}
+                    className="mr-3"
                   />
-                  <span>{c}</span>
+                  <span>{choice}</span>
                 </label>
               );
             })}
           </div>
         )}
 
-        {q.type === "open" && (
+        {question.type === "open" && (
           <textarea
-            rows={5}
-            value={answers[q.id] ?? ""}
-            onChange={(e) => answerQuestion(q.id, e.target.value)}
-            className="w-full p-3 rounded bg-white/5 text-white outline-none"
-            placeholder="Escreve a tua resposta (esta questão será avaliada manualmente)."
+            rows={6}
+            value={currentAnswer ?? ""}
+            onChange={(e) => answerQuestion(question.id, e.target.value)}
+            className="w-full p-4 rounded-lg bg-white/5 text-white outline-none focus:ring-2 focus:ring-brandBlue border border-white/10 resize-none"
+            placeholder="Escreve a tua resposta aqui. Esta questão será avaliada manualmente."
           />
         )}
-      </div>
+      </motion.div>
     );
-  }
+  }, [answers, questions.length, answerQuestion]);
 
-  // small helper to open whatsapp in new tab for purchase/reserve link
-  function whatsappLink() {
-    return "https://wa.me/244921639010";
-  }
-
-  // Render
+  // ============================================================================
+  // MAIN RENDER
+  // ============================================================================
+  
   return (
     <Layout>
-      <div className="min-h-screen pt-24 pb-16 px-6 bg-gradient-to-br from-brandBlue via-brandGreen to-brandOrange text-white">
-        <div className="max-w-6xl mx-auto">
+      <div className="min-h-screen pt-24 pb-16 px-6 bg-gradient-to-br from-brandBlue via-brandGreen to-brandOrange">
+        <div className="max-w-7xl mx-auto">
+          
           {/* LIST VIEW */}
-          {view === "list" && (
-            <>
-              <motion.h1 initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} className="text-3xl font-bold text-center mb-8">
-                🧾 Simulados Disponíveis
-              </motion.h1>
+          {view === VIEWS.LIST && (
+            <AnimatePresence mode="wait">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+              >
+                <motion.h1
+                  initial={{ opacity: 0, y: -20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="text-4xl font-bold text-center mb-4 text-white"
+                >
+                  🧾 Simulados Disponíveis
+                </motion.h1>
+                
+                <motion.p
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.1 }}
+                  className="text-center text-white/80 mb-12 max-w-2xl mx-auto"
+                >
+                  Seleciona um simulado e inicia o modo prova. Cada tentativa será registada automaticamente.
+                </motion.p>
 
-              <div className="mb-6 text-center text-white/90">Seleciona um simulado e inicia o modo prova. Cada tentativa será registada.</div>
+                {error && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="bg-red-500/20 border border-red-500/50 text-white p-4 rounded-lg mb-6 text-center"
+                  >
+                    {error}
+                  </motion.div>
+                )}
 
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                {loadingList ? (
-                  <div>Carregando...</div>
-                ) : (simulados.length ? simulados.map((s) => {
-                  // count questions if possible
-                  let qCount = 0;
-                  try {
-                    const qs = typeof s.questions === "string" ? JSON.parse(s.questions || "[]") : s.questions || [];
-                    qCount = qs.length;
-                  } catch (e) { qCount = 0; }
-                  return (
-                    <motion.div key={s.id} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="bg-white/5 p-5 rounded-2xl shadow-lg flex flex-col justify-between">
-                      <div>
-                        <h3 className="text-xl font-semibold mb-2 text-white">{s.title}</h3>
-                        <p className="text-sm text-white/80 mb-4 line-clamp-3">{s.description || s.excerpt || "—"}</p>
-                        <div className="text-sm text-white/70 mb-3">{qCount} questão(ões)</div>
-                        <div className="text-xs text-white/60 mb-2">Duração: {Number(s.total_time_seconds ?? s.time_seconds) ? `${Math.round((Number(s.total_time_seconds ?? s.time_seconds) || DEFAULT_DURATION_SEC) / 60)} min` : `${Math.round(DEFAULT_DURATION_SEC / 60)} min`}</div>
-                      </div>
-
-                      <div className="flex gap-3 mt-4">
-                        <button
-                          onClick={() => {
-                            // prompt for name/email before starting (small modal-like)
-                            const name = prompt("Nome (opcional):", userName || "");
-                            const email = prompt("Email (opcional):", userEmail || "");
-                            if (name !== null) setUserName(name);
-                            if (email !== null) setUserEmail(email);
-                            startSimulado(s);
-                          }}
-                          className="flex-1 bg-brandBlue px-4 py-2 rounded font-semibold hover:bg-brandBlue/90 transition"
-                        >
-                          Iniciar Simulado
-                        </button>
-
-                        <Link to={`/simulados/${s.id}`} target="_blank" rel="noreferrer" className="px-4 py-2 rounded border border-white/20 hover:bg-white/5">
-                          Detalhes
-                        </Link>
-                      </div>
-                    </motion.div>
-                  );
-                }) : (
-                  <div className="col-span-full text-center text-white/80">Nenhum simulado disponível.</div>
-                ))}
-              </div>
-            </>
+                {loading.list ? (
+                  <div className="flex justify-center items-center py-20">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
+                  </div>
+                ) : simulados.length > 0 ? (
+                  <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {simulados.map(renderSimuladoCard)}
+                  </div>
+                ) : (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="text-center py-20"
+                  >
+                    <div className="text-6xl mb-4">📚</div>
+                    <p className="text-white/60 text-lg">
+                      Nenhum simulado disponível no momento.
+                    </p>
+                  </motion.div>
+                )}
+              </motion.div>
+            </AnimatePresence>
           )}
 
-          {/* EXAM VIEW */}
-          {view === "exam" && currentSimulado && (
-            <>
-              <div className="flex items-center justify-between mb-6">
-                <div>
-                  <h2 className="text-2xl font-bold">{currentSimulado.title}</h2>
-                  <div className="text-sm text-white/80">{currentSimulado.description || currentSimulado.excerpt}</div>
-                </div>
+          {/* USER INFO MODAL VIEW */}
+          {view === VIEWS.USER_INFO && currentSimulado && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="max-w-md mx-auto"
+            >
+              <div className="bg-white/10 backdrop-blur-lg p-8 rounded-2xl border border-white/20 shadow-2xl">
+                <h2 className="text-2xl font-bold text-white mb-2">
+                  {currentSimulado.title}
+                </h2>
+                <p className="text-white/70 mb-6 text-sm">
+                  Antes de começar, por favor identifica-te (opcional)
+                </p>
 
-                <div className="text-right">
-                  <div className="text-sm text-white/80 mb-1">Tempo restante</div>
-                  <div className="text-2xl font-mono font-bold">{formatTime(timeLeft ?? 0)}</div>
-                </div>
-              </div>
-
-              {/* Question area + side summary */}
-              <div className="grid md:grid-cols-3 gap-6">
-                <div className="md:col-span-2">
-                  {questions.length ? (
-                    <>
-                      <QuestionCard q={questions[currentIndex]} idx={currentIndex} />
-                      <div className="flex justify-between items-center mt-4">
-                        <button onClick={goPrev} disabled={currentIndex === 0} className="px-4 py-2 rounded bg-white/5 hover:bg-white/10">Anterior</button>
-                        <div className="flex items-center gap-3">
-                          <button onClick={() => {
-                            // quick: mark current as unanswered? just go next
-                            if (currentIndex < questions.length - 1) goNext();
-                          }} className="px-4 py-2 rounded bg-brandBlue">Próxima</button>
-                          <button onClick={() => {
-                            if (!confirm("Deseja terminar o simulado e submeter as respostas?")) return;
-                            finishExam();
-                          }} className="px-4 py-2 rounded bg-brandGreen text-black">Terminar e Enviar</button>
-                        </div>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="bg-white/5 p-6 rounded">Este simulado não possui perguntas.</div>
-                  )}
-                </div>
-
-                <aside className="p-4 bg-white/5 rounded-lg">
-                  <div className="mb-4">
-                    <div className="text-sm text-white/80">Progresso</div>
-                    <div className="text-lg font-semibold mt-1">{Object.keys(answers).length} / {questions.length} respondidas</div>
+                <div className="space-y-4 mb-6">
+                  <div>
+                    <label className="block text-sm text-white/80 mb-2">
+                      Nome
+                    </label>
+                    <input
+                      type="text"
+                      value={userName}
+                      onChange={(e) => setUserName(e.target.value)}
+                      placeholder="O teu nome"
+                      className="w-full p-3 rounded-lg bg-white/5 text-white border border-white/10 outline-none focus:ring-2 focus:ring-brandBlue"
+                    />
                   </div>
 
-                  <div className="mb-4">
-                    <div className="text-sm text-white/80 mb-2">Mapa rápido</div>
-                    <div className="grid grid-cols-5 gap-2">
-                      {questions.map((q, i) => {
-                        const done = answers[q.id] !== undefined && answers[q.id] !== null && answers[q.id] !== "";
-                        return (
-                          <button
-                            key={q.id}
-                            onClick={() => setCurrentIndex(i)}
-                            className={`px-2 py-1 text-xs rounded ${done ? "bg-brandGreen text-black" : "bg-white/3 text-white"}`}
-                          >
-                            {i + 1}
-                          </button>
-                        );
-                      })}
-                    </div>
+                  <div>
+                    <label className="block text-sm text-white/80 mb-2">
+                      Email
+                    </label>
+                    <input
+                      type="email"
+                      value={userEmail}
+                      onChange={(e) => setUserEmail(e.target.value)}
+                      placeholder="O teu email"
+                      className="w-full p-3 rounded-lg bg-white/5 text-white border border-white/10 outline-none focus:ring-2 focus:ring-brandBlue"
+                    />
                   </div>
-
-                  <div className="text-sm text-white/80">
-                    <div className="mb-2">Nome: <strong className="block text-white">{userName || "—"}</strong></div>
-                    <div>Email: <strong className="block text-white">{userEmail || "—"}</strong></div>
-                  </div>
-
-                  <div className="mt-4 flex flex-col gap-2">
-                    <button onClick={abortExam} className="px-3 py-2 rounded bg-red-600">Abandonar</button>
-                  </div>
-                </aside>
-              </div>
-            </>
-          )}
-
-          {/* RESULT VIEW */}
-          {view === "result" && (
-            <>
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-white/5 p-8 rounded-2xl">
-                <h2 className="text-2xl font-bold mb-2">Resultado</h2>
-                <div className="mb-4 text-white/80">Obrigado, {userName || "Aluno(a)"} — a tua tentativa foi registada.</div>
-
-                <div className="mb-4">
-                  <div className="text-sm text-white/80">Pontuação</div>
-                  <div className="text-4xl font-bold">{attemptResult?.score ?? "—"} / 20</div>
-                </div>
-
-                <div className="mb-6">
-                  <h4 className="font-semibold mb-2">Resumo</h4>
-                  <div className="text-sm text-white/80">Questões respondidas: {Object.keys(answers).length} / {questions.length}</div>
                 </div>
 
                 <div className="flex gap-3">
-                  {/* If the simulado title or description contains words like "curso" or "formação", show "Reservar Vaga" */}
-                  {/(curso|formação|formacao|inscrição|venda|comprar|workshop)/i.test(currentSimulado?.title + " " + (currentSimulado?.description || "")) ? (
-                    <a href={whatsappLink()} target="_blank" rel="noreferrer" className="px-4 py-2 rounded bg-brandGreen text-black font-semibold">Reservar Vaga (WhatsApp)</a>
+                  <button
+                    onClick={() => startSimulado(currentSimulado)}
+                    className="flex-1 bg-brandGreen hover:bg-brandGreen/90 text-black font-semibold px-6 py-3 rounded-lg transition-all duration-200 transform hover:scale-105"
+                  >
+                    Começar Agora
+                  </button>
+                  <button
+                    onClick={() => {
+                      setView(VIEWS.LIST);
+                      setCurrentSimulado(null);
+                    }}
+                    className="px-6 py-3 rounded-lg bg-white/5 hover:bg-white/10 transition-all duration-200"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {/* EXAM VIEW */}
+          {view === VIEWS.EXAM && currentSimulado && questions.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+            >
+              {/* Header */}
+              <div className="bg-white/10 backdrop-blur-lg p-6 rounded-2xl mb-6 border border-white/20">
+                <div className="flex items-center justify-between flex-wrap gap-4">
+                  <div className="flex-1 min-w-[200px]">
+                    <h2 className="text-2xl font-bold text-white mb-1">
+                      {currentSimulado.title}
+                    </h2>
+                    <p className="text-sm text-white/70">
+                      {currentSimulado.description || currentSimulado.excerpt}
+                    </p>
+                  </div>
+
+                  <div className="text-right">
+                    <div className="text-sm text-white/70 mb-1">
+                      ⏱️ Tempo restante
+                    </div>
+                    <div className={`
+                      text-3xl font-mono font-bold
+                      ${timeLeft <= 60 ? 'text-red-400 animate-pulse' : 'text-white'}
+                    `}>
+                      {formatTime(timeLeft)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Progress bar */}
+                <div className="mt-4">
+                  <div className="flex justify-between text-sm text-white/70 mb-2">
+                    <span>Progresso: {answeredCount}/{questions.length}</span>
+                    <span>{progressPercentage}%</span>
+                  </div>
+                  <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
+                    <motion.div
+                      className="h-full bg-brandGreen"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${progressPercentage}%` }}
+                      transition={{ duration: 0.3 }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Main content */}
+              <div className="grid lg:grid-cols-4 gap-6">
+                {/* Question area */}
+                <div className="lg:col-span-3 space-y-6">
+                  <AnimatePresence mode="wait">
+                    {renderQuestionCard(questions[currentIndex], currentIndex)}
+                  </AnimatePresence>
+
+                  {/* Navigation */}
+                  <div className="flex justify-between items-center gap-4">
+                    <button
+                      onClick={goPrev}
+                      disabled={currentIndex === 0}
+                      className="px-6 py-3 rounded-lg bg-white/5 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+                    >
+                      ← Anterior
+                    </button>
+
+                    <div className="flex gap-3">
+                      {currentIndex < questions.length - 1 ? (
+                        <button
+                          onClick={goNext}
+                          className="px-6 py-3 rounded-lg bg-brandBlue hover:bg-brandBlue/90 font-semibold transition-all duration-200"
+                        >
+                          Próxima →
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            const confirmed = window.confirm(
+                              "Deseja terminar o simulado e submeter as respostas?"
+                            );
+                            if (confirmed) finishExam(false);
+                          }}
+                          className="px-6 py-3 rounded-lg bg-brandGreen hover:bg-brandGreen/90 text-black font-bold transition-all duration-200 transform hover:scale-105"
+                        >
+                          Terminar e Enviar ✓
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Sidebar */}
+                <aside className="lg:col-span-1">
+                  <div className="bg-white/10 backdrop-blur-lg p-6 rounded-2xl border border-white/20 sticky top-24 space-y-6">
+                    {/* Quick map */}
+                    <div>
+                      <h3 className="text-sm font-semibold text-white/80 mb-3">
+                        Mapa de Questões
+                      </h3>
+                      <div className="grid grid-cols-5 gap-2">
+                        {questions.map((q, i) => {
+                          const isAnswered = answers[q.id] !== undefined && 
+                                            answers[q.id] !== null && 
+                                            answers[q.id] !== "";
+                          const isCurrent = i === currentIndex;
+                          
+                          return (
+                            <button
+                              key={q.id}
+                              onClick={() => goToQuestion(i)}
+                              className={`
+                                aspect-square rounded-lg text-sm font-semibold
+                                transition-all duration-200 transform hover:scale-110
+                                ${isCurrent 
+                                  ? 'bg-brandBlue text-white ring-2 ring-white' 
+                                  : isAnswered 
+                                    ? 'bg-brandGreen text-black' 
+                                    : 'bg-white/10 text-white hover:bg-white/20'
+                                }
+                              `}
+                              title={`Questão ${i + 1}`}
+                            >
+                              {i + 1}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* User info */}
+                    <div className="pt-4 border-t border-white/10">
+                      <h3 className="text-sm font-semibold text-white/80 mb-2">
+                        Informações
+                      </h3>
+                      <div className="space-y-2 text-sm">
+                        <div>
+                          <span className="text-white/60">Nome:</span>
+                          <div className="text-white font-medium">
+                            {userName || "—"}
+                          </div>
+                        </div>
+                        <div>
+                          <span className="text-white/60">Email:</span>
+                          <div className="text-white font-medium truncate">
+                            {userEmail || "—"}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="pt-4 border-t border-white/10">
+                      <button
+                        onClick={abortExam}
+                        className="w-full px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold transition-all duration-200"
+                      >
+                        🚪 Abandonar
+                      </button>
+                    </div>
+                  </div>
+                </aside>
+              </div>
+            </motion.div>
+          )}
+
+          {/* RESULT VIEW */}
+          {view === VIEWS.RESULT && attemptResult && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="max-w-2xl mx-auto"
+            >
+              <div className="bg-white/10 backdrop-blur-lg p-8 rounded-2xl border border-white/20 shadow-2xl">
+                <div className="text-center mb-8">
+                  <div className="text-6xl mb-4">
+                    {attemptResult.score >= 15 ? "🎉" : attemptResult.score >= 10 ? "👍" : "📚"}
+                  </div>
+                  <h2 className="text-3xl font-bold text-white mb-2">
+                    {attemptResult.autoFinish ? "Tempo Esgotado!" : "Simulado Concluído!"}
+                  </h2>
+                  <p className="text-white/70">
+                    {userName 
+                      ? `Obrigado, ${userName}!` 
+                      : "Obrigado pela participação!"
+                    }
+                  </p>
+                </div>
+
+                {/* Score */}
+                <div className="bg-white/5 p-6 rounded-xl mb-6 text-center">
+                  <div className="text-sm text-white/60 mb-2">
+                    A Tua Pontuação
+                  </div>
+                  <div className="text-6xl font-bold text-white mb-2">
+                    {attemptResult.score.toFixed(2)}
+                  </div>
+                  <div className="text-xl text-white/80">
+                    / 20 valores
+                  </div>
+                  
+                  {/* Performance message */}
+                  <div className="mt-4 text-white/70">
+                    {attemptResult.score >= 15 && "Excelente desempenho! 🌟"}
+                    {attemptResult.score >= 10 && attemptResult.score < 15 && "Bom trabalho! Continue a estudar. 📖"}
+                    {attemptResult.score < 10 && "Continue a praticar! Não desistas. 💪"}
+                  </div>
+                </div>
+
+                {/* Summary */}
+                <div className="bg-white/5 p-6 rounded-xl mb-6">
+                  <h3 className="font-semibold text-white mb-4 flex items-center gap-2">
+                    📊 Resumo
+                  </h3>
+                  
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <div className="text-white/60">Total de Questões</div>
+                      <div className="text-xl font-bold text-white">
+                        {questions.length}
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <div className="text-white/60">Respondidas</div>
+                      <div className="text-xl font-bold text-white">
+                        {answeredCount}
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <div className="text-white/60">Taxa de Conclusão</div>
+                      <div className="text-xl font-bold text-white">
+                        {progressPercentage}%
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <div className="text-white/60">Estado</div>
+                      <div className="text-xl font-bold text-white">
+                        {attemptResult.saved ? "✓ Guardado" : "⚠️ Não guardado"}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Save status */}
+                {!attemptResult.saved && (
+                  <div className="bg-yellow-500/20 border border-yellow-500/50 p-4 rounded-lg mb-6 text-sm text-white">
+                    ⚠️ A tua tentativa não foi guardada. Por favor, contacta o suporte se necessário.
+                  </div>
+                )}
+
+                {loading.saving && (
+                  <div className="bg-brandBlue/20 border border-brandBlue/50 p-4 rounded-lg mb-6 text-sm text-white flex items-center gap-3">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    A guardar a tua tentativa...
+                  </div>
+                )}
+
+                {/* Actions */}
+                <div className="space-y-3">
+                  {/* Primary CTA based on simulado type */}
+                  {shouldShowReserveButton(currentSimulado) ? (
+                    <a
+                      href={getWhatsAppLink()}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block w-full text-center px-6 py-4 rounded-lg bg-brandGreen hover:bg-brandGreen/90 text-black font-bold text-lg transition-all duration-200 transform hover:scale-105"
+                    >
+                      🎓 Reservar Vaga no Curso
+                    </a>
                   ) : (
-                    <a href={whatsappLink()} target="_blank" rel="noreferrer" className="px-4 py-2 rounded bg-brandBlue font-semibold">Comprar / Contactar (WhatsApp)</a>
+                    <a
+                      href={getWhatsAppLink()}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block w-full text-center px-6 py-4 rounded-lg bg-brandBlue hover:bg-brandBlue/90 text-white font-bold text-lg transition-all duration-200 transform hover:scale-105"
+                    >
+                      💬 Falar Connosco no WhatsApp
+                    </a>
                   )}
 
-                  <button onClick={() => { setView("list"); setCurrentSimulado(null); setQuestions([]); setAnswers({}); setAttemptResult(null); }} className="px-4 py-2 rounded bg-white/5">Voltar à lista</button>
-
-                  <button onClick={() => window.open(whatsappLink(), "_blank")} className="px-4 py-2 rounded bg-white/5">Conversar</button>
+                  {/* Secondary actions */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => {
+                        resetExamState();
+                        setView(VIEWS.LIST);
+                      }}
+                      className="px-6 py-3 rounded-lg bg-white/5 hover:bg-white/10 transition-all duration-200"
+                    >
+                      📋 Ver Outros Simulados
+                    </button>
+                    
+                    <button
+                      onClick={() => {
+                        setView(VIEWS.USER_INFO);
+                      }}
+                      className="px-6 py-3 rounded-lg bg-white/5 hover:bg-white/10 transition-all duration-200"
+                    >
+                      🔄 Repetir Este Simulado
+                    </button>
+                  </div>
                 </div>
-              </motion.div>
-            </>
+
+                {/* Footer note */}
+                <div className="mt-6 pt-6 border-t border-white/10 text-center text-sm text-white/60">
+                  Os resultados foram registados automaticamente.
+                  {userEmail && " Receberás uma confirmação no email fornecido."}
+                </div>
+              </div>
+            </motion.div>
           )}
+
         </div>
       </div>
     </Layout>

@@ -1,0 +1,50 @@
+[
+  {
+    "id": 1001,
+    "title": "Simulado Introdutório — Anatomia",
+    "description": "Simulado inicial de anatomia: 5 questões (mistas). Boa prática para começar.",
+    "image_url": "https://images.unsplash.com/photo-1580281657521-9de073b1d1dc?auto=format&fit=crop&w=1200&q=60",
+    "tema": "Anatomia",
+    "disciplina": "Anatomia Humana",
+    "duration": 10,
+    "questions": [
+      {
+        "id": "q1",
+        "type": "mcq",
+        "question": "Qual é o menor osso do corpo humano?",
+        "choices": ["Fêmur", "Estribo", "Úmero", "Patela"],
+        "correct": 1,
+        "points": 1
+      },
+      {
+        "id": "q2",
+        "type": "truefalse",
+        "question": "O coração humano tem quatro cavidades.",
+        "choices": ["Verdadeiro", "Falso"],
+        "correct": 0,
+        "points": 1
+      },
+      {
+        "id": "q3",
+        "type": "fill",
+        "question": "Preencha: O osso que protege o cérebro chama-se ________.",
+        "correct": "crânio",
+        "points": 2
+      },
+      {
+        "id": "q4",
+        "type": "open",
+        "question": "Explique brevemente a função dos alvéolos pulmonares.",
+        "points": 3
+      },
+      {
+        "id": "q5",
+        "type": "mcq",
+        "question": "O músculo responsável pela respiração principal é:",
+        "choices": ["Diafragma", "Bíceps", "Trapézio", "Gastrocnêmio"],
+        "correct": 0,
+        "points": 1
+      }
+    ]
+  }
+]
