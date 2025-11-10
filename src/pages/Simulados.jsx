@@ -5,33 +5,13 @@ import { supabase } from "../supabaseClient";
 import Layout from "../components/Layout";
 import { Link } from "react-router-dom";
 
-/**
- * Simulados page + exam runner - Versão melhorada
- * 
- * Melhorias implementadas:
- * - Melhor gestão de estado com useCallback e useMemo
- * - Tratamento robusto de erros
- * - Loading states mais claros
- * - Validação de dados aprimorada
- * - Modal para nome/email em vez de prompt
- * - Animações suaves
- * - Código mais limpo e organizado
- */
-
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-const DEFAULT_DURATION_SEC = 20 * 60; // 20 minutes
+const DEFAULT_DURATION_SEC = 20 * 60;
 const VIEWS = {
   LIST: "list",
   USER_INFO: "userInfo",
   EXAM: "exam",
   RESULT: "result"
 };
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
 
 const parseQuestions = (questionsData) => {
   try {
@@ -81,7 +61,6 @@ const calculateScore = (questions, answers) => {
       
       if (isCorrect) earnedPoints += points;
     }
-    // Open questions: not auto-graded (could be graded manually later)
   }
   
   if (totalPoints === 0) return 0;
@@ -96,44 +75,35 @@ const shouldShowReserveButton = (simulado) => {
   return /(curso|formação|formacao|inscrição|inscricao|venda|comprar|workshop)/i.test(text);
 };
 
-// ============================================================================
-// MAIN COMPONENT
-// ============================================================================
-
 export default function Simulados() {
-  // State management
   const [simulados, setSimulados] = useState([]);
   const [loading, setLoading] = useState({ list: true, saving: false });
   const [error, setError] = useState(null);
   const [view, setView] = useState(VIEWS.LIST);
   
-  // Exam state
   const [currentSimulado, setCurrentSimulado] = useState(null);
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState({});
   const [currentIndex, setCurrentIndex] = useState(0);
   const [timeLeft, setTimeLeft] = useState(null);
   
-  // User info
   const [userName, setUserName] = useState("");
   const [userEmail, setUserEmail] = useState("");
   
-  // Result
   const [attemptResult, setAttemptResult] = useState(null);
   const [showFinishModal, setShowFinishModal] = useState(false);
+  const [showCorrections, setShowCorrections] = useState(false);
   
-  // Refs
+  const [searchTerm, setSearchTerm] = useState("");
+  const [sortBy, setSortBy] = useState("recent");
+  const [filterTema, setFilterTema] = useState("all");
+  
   const timerRef = useRef(null);
 
-  // ============================================================================
-  // EFFECTS
-  // ============================================================================
-  
   useEffect(() => {
     loadSimulados();
   }, []);
 
-  // Cleanup timer on unmount
   useEffect(() => {
     return () => {
       if (timerRef.current) {
@@ -142,10 +112,6 @@ export default function Simulados() {
     };
   }, []);
 
-  // ============================================================================
-  // API FUNCTIONS
-  // ============================================================================
-  
   const loadSimulados = useCallback(async () => {
     setLoading(prev => ({ ...prev, list: true }));
     setError(null);
@@ -192,17 +158,12 @@ export default function Simulados() {
       return data;
     } catch (err) {
       console.error("Erro ao gravar tentativa:", err);
-      // Don't throw - we still want to show results even if save fails
       return null;
     } finally {
       setLoading(prev => ({ ...prev, saving: false }));
     }
   }, []);
 
-  // ============================================================================
-  // EXAM CONTROL FUNCTIONS
-  // ============================================================================
-  
   const startTimer = useCallback((duration) => {
     if (timerRef.current) {
       clearInterval(timerRef.current);
@@ -214,7 +175,7 @@ export default function Simulados() {
       setTimeLeft((prevTime) => {
         if (prevTime <= 1) {
           clearInterval(timerRef.current);
-          finishExam(true); // Auto-finish when time runs out
+          finishExam(true);
           return 0;
         }
         return prevTime - 1;
@@ -236,6 +197,7 @@ export default function Simulados() {
       setAnswers({});
       setCurrentIndex(0);
       setAttemptResult(null);
+      setShowCorrections(false);
       
       const duration = Number(
         simulado.total_time_seconds ?? 
@@ -254,16 +216,13 @@ export default function Simulados() {
   const finishExam = useCallback(async (autoFinish = false) => {
     if (!currentSimulado || !questions.length) return;
     
-    // Stop timer
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
     
-    // Calculate score and detailed results
     const score = calculateScore(questions, answers);
     
-    // Calculate correct/wrong answers
     let correctCount = 0;
     let wrongCount = 0;
     const detailedResults = questions.map((q) => {
@@ -282,7 +241,7 @@ export default function Simulados() {
             wrongCount++;
           }
         } else {
-          wrongCount++; // Não respondida conta como errada
+          wrongCount++;
         }
       }
       
@@ -294,7 +253,6 @@ export default function Simulados() {
       };
     });
     
-    // Save attempt
     const savedAttempt = await saveAttempt(
       currentSimulado,
       userName,
@@ -304,7 +262,6 @@ export default function Simulados() {
       score
     );
     
-    // Show result
     setAttemptResult({
       score,
       saved: savedAttempt,
@@ -339,12 +296,9 @@ export default function Simulados() {
     setCurrentIndex(0);
     setTimeLeft(null);
     setAttemptResult(null);
+    setShowCorrections(false);
   }, []);
 
-  // ============================================================================
-  // NAVIGATION & ANSWER FUNCTIONS
-  // ============================================================================
-  
   const answerQuestion = useCallback((questionId, value) => {
     setAnswers(prev => ({ ...prev, [questionId]: value }));
   }, []);
@@ -367,10 +321,6 @@ export default function Simulados() {
     }
   }, [currentIndex]);
 
-  // ============================================================================
-  // COMPUTED VALUES
-  // ============================================================================
-  
   const answeredCount = useMemo(() => {
     return Object.entries(answers).filter(([_, value]) => {
       return value !== undefined && value !== null && value !== "";
@@ -382,10 +332,61 @@ export default function Simulados() {
     return Math.round((answeredCount / questions.length) * 100);
   }, [answeredCount, questions.length]);
 
-  // ============================================================================
-  // RENDER FUNCTIONS
-  // ============================================================================
-  
+  const temas = useMemo(() => {
+    const allTemas = new Set(["Todos"]);
+    simulados.forEach(sim => {
+      const desc = (sim.description || sim.title || "").toLowerCase();
+      if (desc.includes("fundamentos")) allTemas.add("Fundamentos");
+      if (desc.includes("anatomia")) allTemas.add("Anatomia");
+      if (desc.includes("farmacologia")) allTemas.add("Farmacologia");
+      if (desc.includes("microbiologia")) allTemas.add("Microbiologia");
+      if (desc.includes("combo") || desc.includes("misto")) allTemas.add("Combos");
+    });
+    return Array.from(allTemas);
+  }, [simulados]);
+
+  const filteredAndSortedSimulados = useMemo(() => {
+    let filtered = simulados;
+    
+    if (searchTerm) {
+      filtered = filtered.filter(s => 
+        s.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        s.description?.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+    
+    if (filterTema !== "all" && filterTema !== "Todos") {
+      filtered = filtered.filter(s => {
+        const desc = (s.description || s.title || "").toLowerCase();
+        return desc.includes(filterTema.toLowerCase());
+      });
+    }
+    
+    const sorted = [...filtered];
+    switch(sortBy) {
+      case "recent":
+        sorted.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        break;
+      case "oldest":
+        sorted.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+        break;
+      case "title":
+        sorted.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+        break;
+      case "questions":
+        sorted.sort((a, b) => {
+          const aQ = parseQuestions(a.questions).length;
+          const bQ = parseQuestions(b.questions).length;
+          return bQ - aQ;
+        });
+        break;
+      default:
+        break;
+    }
+    
+    return sorted;
+  }, [simulados, searchTerm, filterTema, sortBy]);
+
   const renderSimuladoCard = useCallback((simulado) => {
     const questionCount = parseQuestions(simulado.questions).length;
     const duration = Number(
@@ -400,50 +401,39 @@ export default function Simulados() {
         key={simulado.id}
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
+        whileHover={{ y: -8, boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)" }}
         transition={{ duration: 0.3 }}
-        className="bg-white/5 backdrop-blur-sm p-6 rounded-2xl shadow-xl hover:shadow-2xl transition-all duration-300 flex flex-col justify-between border border-white/10"
+        className="bg-gradient-to-br from-white/10 to-white/5 backdrop-blur-md p-6 rounded-3xl shadow-2xl border border-white/20 flex flex-col justify-between hover:border-white/40"
       >
         <div>
-          <h3 className="text-xl font-semibold mb-3 text-white">
+          <h3 className="text-2xl font-bold mb-3 text-white bg-gradient-to-r from-brandGreen to-brandBlue bg-clip-text text-transparent">
             {simulado.title}
           </h3>
-          <p className="text-sm text-white/70 mb-4 line-clamp-3">
+          <p className="text-sm text-white/80 mb-6 line-clamp-3 leading-relaxed">
             {simulado.description || simulado.excerpt || "Sem descrição disponível"}
           </p>
           
-          <div className="flex items-center gap-4 text-sm text-white/60 mb-4">
-            <div className="flex items-center gap-2">
-              <span>📝</span>
-              <span>{questionCount} questão{questionCount !== 1 ? "ões" : ""}</span>
+          <div className="flex items-center gap-6 text-sm text-white/70 mb-4">
+            <div className="flex items-center gap-2 bg-white/10 px-3 py-2 rounded-full">
+              <span className="text-lg">📝</span>
+              <span className="font-semibold">{questionCount} questões</span>
             </div>
-            <div className="flex items-center gap-2">
-              <span>⏱️</span>
-              <span>{durationMinutes} min</span>
+            <div className="flex items-center gap-2 bg-white/10 px-3 py-2 rounded-full">
+              <span className="text-lg">⏱️</span>
+              <span className="font-semibold">{durationMinutes} min</span>
             </div>
           </div>
         </div>
 
-        <div className="flex gap-3 mt-4">
-          <button
-            onClick={() => {
-              setCurrentSimulado(simulado);
-              setView(VIEWS.USER_INFO);
-            }}
-            className="flex-1 bg-brandBlue hover:bg-brandBlue/90 px-4 py-3 rounded-lg font-semibold transition-all duration-200 transform hover:scale-105"
-          >
-            Iniciar Simulado
-          </button>
-
-          <Link
-            to={`/simulados/${simulado.id}`}
-            target="_blank"
-            rel="noreferrer"
-            className="px-4 py-3 rounded-lg border border-white/20 hover:bg-white/5 transition-all duration-200 flex items-center justify-center"
-            title="Ver detalhes"
-          >
-            ℹ️
-          </Link>
-        </div>
+        <button
+          onClick={() => {
+            setCurrentSimulado(simulado);
+            setView(VIEWS.USER_INFO);
+          }}
+          className="w-full bg-gradient-to-r from-brandBlue to-brandGreen hover:from-brandBlue/90 hover:to-brandGreen/90 text-white font-bold px-6 py-4 rounded-2xl transition-all duration-300 transform hover:scale-105 shadow-lg"
+        >
+          Iniciar Simulado →
+        </button>
       </motion.div>
     );
   }, []);
@@ -457,19 +447,19 @@ export default function Simulados() {
         initial={{ opacity: 0, x: 20 }}
         animate={{ opacity: 1, x: 0 }}
         exit={{ opacity: 0, x: -20 }}
-        className="bg-white/5 backdrop-blur-sm p-6 rounded-2xl border border-white/10"
+        className="bg-white/10 backdrop-blur-md p-8 rounded-3xl border border-white/20 shadow-2xl"
       >
-        <div className="mb-4">
-          <div className="text-sm text-white/60 mb-2">
+        <div className="mb-6">
+          <div className="text-sm text-white/60 mb-3 font-semibold">
             Questão {index + 1} de {questions.length}
           </div>
-          <h3 className="text-lg font-semibold text-white leading-relaxed">
+          <h3 className="text-xl font-bold text-white leading-relaxed">
             {question.question}
           </h3>
         </div>
 
         {question.type === "mcq" && (
-          <div className="grid gap-3">
+          <div className="grid gap-4">
             {question.choices.map((choice, choiceIndex) => {
               const isSelected = currentAnswer === choiceIndex;
               
@@ -477,10 +467,10 @@ export default function Simulados() {
                 <label
                   key={choiceIndex}
                   className={`
-                    block p-4 rounded-lg cursor-pointer transition-all duration-200
+                    block p-5 rounded-2xl cursor-pointer transition-all duration-300 border-2
                     ${isSelected 
-                      ? "bg-brandGreen text-black font-semibold shadow-lg scale-105" 
-                      : "bg-white/5 text-white hover:bg-white/10"
+                      ? "bg-gradient-to-r from-brandGreen to-brandBlue text-white font-bold shadow-2xl scale-105 border-white" 
+                      : "bg-white/5 text-white hover:bg-white/10 border-white/20 hover:border-white/40"
                     }
                   `}
                 >
@@ -490,9 +480,9 @@ export default function Simulados() {
                     value={choiceIndex}
                     checked={isSelected}
                     onChange={() => answerQuestion(question.id, choiceIndex)}
-                    className="mr-3"
+                    className="mr-4"
                   />
-                  <span>{choice}</span>
+                  <span className="text-lg">{choice}</span>
                 </label>
               );
             })}
@@ -501,10 +491,10 @@ export default function Simulados() {
 
         {question.type === "open" && (
           <textarea
-            rows={6}
+            rows={8}
             value={currentAnswer ?? ""}
             onChange={(e) => answerQuestion(question.id, e.target.value)}
-            className="w-full p-4 rounded-lg bg-white/5 text-white outline-none focus:ring-2 focus:ring-brandBlue border border-white/10 resize-none"
+            className="w-full p-5 rounded-2xl bg-white/10 text-white outline-none focus:ring-4 focus:ring-brandBlue/50 border-2 border-white/20 focus:border-brandBlue resize-none backdrop-blur-md text-lg"
             placeholder="Escreve a tua resposta aqui. Esta questão será avaliada manualmente."
           />
         )}
@@ -512,16 +502,11 @@ export default function Simulados() {
     );
   }, [answers, questions.length, answerQuestion]);
 
-  // ============================================================================
-  // MAIN RENDER
-  // ============================================================================
-  
   return (
     <Layout>
       <div className="min-h-screen pt-24 pb-16 px-6 bg-gradient-to-br from-brandBlue via-brandGreen to-brandOrange">
         <div className="max-w-7xl mx-auto">
           
-          {/* LIST VIEW */}
           {view === VIEWS.LIST && (
             <AnimatePresence mode="wait">
               <motion.div
@@ -532,7 +517,7 @@ export default function Simulados() {
                 <motion.h1
                   initial={{ opacity: 0, y: -20 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="text-4xl font-bold text-center mb-4 text-white"
+                  className="text-5xl font-extrabold text-center mb-4 text-white drop-shadow-2xl"
                 >
                   🧾 Simulados Disponíveis
                 </motion.h1>
@@ -541,28 +526,81 @@ export default function Simulados() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   transition={{ delay: 0.1 }}
-                  className="text-center text-white/80 mb-12 max-w-2xl mx-auto"
+                  className="text-center text-white/90 mb-12 max-w-2xl mx-auto text-lg"
                 >
                   Seleciona um simulado e inicia o modo prova. Cada tentativa será registada automaticamente.
                 </motion.p>
 
+                <div className="max-w-3xl mx-auto mb-12">
+                  <div className="bg-white/10 backdrop-blur-md p-3 rounded-3xl border border-white/30 shadow-2xl">
+                    <input
+                      type="text"
+                      placeholder="🔍 Pesquisar simulados..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="w-full px-6 py-4 rounded-2xl bg-white/20 text-white placeholder-white/60 outline-none text-lg font-semibold border-2 border-transparent focus:border-white/50"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap justify-center gap-4 mb-12">
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value)}
+                    className="px-6 py-3 rounded-full bg-white/20 backdrop-blur-md text-white font-semibold outline-none cursor-pointer border-2 border-white/30 hover:border-white/50"
+                  >
+                    <option value="recent">Mais Recentes</option>
+                    <option value="oldest">Mais Antigos</option>
+                    <option value="title">Nome (A-Z)</option>
+                    <option value="questions">Mais Questões</option>
+                  </select>
+
+                  <div className="flex flex-wrap gap-2">
+                    {temas.map(tema => (
+                      <button
+                        key={tema}
+                        onClick={() => setFilterTema(tema === "Todos" ? "all" : tema)}
+                        className={`px-6 py-3 rounded-full font-semibold transition-all duration-300 border-2 ${
+                          (filterTema === "all" && tema === "Todos") || filterTema === tema
+                            ? "bg-white text-black border-white shadow-xl scale-110"
+                            : "bg-white/10 text-white border-white/30 hover:bg-white/20 hover:border-white/50"
+                        }`}
+                      >
+                        {tema}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 {error && (
                   <motion.div
-                    initial={{ opacity: 0, y: -10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="bg-red-500/20 border border-red-500/50 text-white p-4 rounded-lg mb-6 text-center"
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
                   >
-                    {error}
+                    <div className="bg-gradient-to-br from-red-500/90 to-red-600/90 backdrop-blur-xl p-8 rounded-3xl border-2 border-white/30 shadow-2xl max-w-md mx-4">
+                      <div className="text-center">
+                        <div className="text-6xl mb-4">⚠️</div>
+                        <h3 className="text-2xl font-bold text-white mb-3">Erro</h3>
+                        <p className="text-white/90 mb-6">{error}</p>
+                        <button
+                          onClick={() => setError(null)}
+                          className="px-8 py-3 rounded-xl bg-white text-red-600 font-bold hover:scale-105 transition-transform"
+                        >
+                          OK
+                        </button>
+                      </div>
+                    </div>
                   </motion.div>
                 )}
 
                 {loading.list ? (
                   <div className="flex justify-center items-center py-20">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
+                    <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-white"></div>
                   </div>
-                ) : simulados.length > 0 ? (
-                  <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {simulados.map(renderSimuladoCard)}
+                ) : filteredAndSortedSimulados.length > 0 ? (
+                  <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-8">
+                    {filteredAndSortedSimulados.map(renderSimuladoCard)}
                   </div>
                 ) : (
                   <motion.div
@@ -570,9 +608,9 @@ export default function Simulados() {
                     animate={{ opacity: 1 }}
                     className="text-center py-20"
                   >
-                    <div className="text-6xl mb-4">📚</div>
-                    <p className="text-white/60 text-lg">
-                      Nenhum simulado disponível no momento.
+                    <div className="text-8xl mb-6">📚</div>
+                    <p className="text-white/60 text-2xl font-semibold">
+                      Nenhum simulado encontrado.
                     </p>
                   </motion.div>
                 )}
@@ -580,24 +618,23 @@ export default function Simulados() {
             </AnimatePresence>
           )}
 
-          {/* USER INFO MODAL VIEW */}
           {view === VIEWS.USER_INFO && currentSimulado && (
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               className="max-w-md mx-auto"
             >
-              <div className="bg-white/10 backdrop-blur-lg p-8 rounded-2xl border border-white/20 shadow-2xl">
-                <h2 className="text-2xl font-bold text-white mb-2">
+              <div className="bg-gradient-to-br from-white/20 to-white/10 backdrop-blur-xl p-10 rounded-3xl border-2 border-white/30 shadow-2xl">
+                <h2 className="text-3xl font-bold text-white mb-3">
                   {currentSimulado.title}
                 </h2>
-                <p className="text-white/70 mb-6 text-sm">
+                <p className="text-white/80 mb-8 text-lg">
                   Antes de começar, por favor identifica-te (opcional)
                 </p>
 
-                <div className="space-y-4 mb-6">
+                <div className="space-y-5 mb-8">
                   <div>
-                    <label className="block text-sm text-white/80 mb-2">
+                    <label className="block text-sm text-white/80 mb-2 font-semibold">
                       Nome
                     </label>
                     <input
@@ -605,12 +642,12 @@ export default function Simulados() {
                       value={userName}
                       onChange={(e) => setUserName(e.target.value)}
                       placeholder="O teu nome"
-                      className="w-full p-3 rounded-lg bg-white/5 text-white border border-white/10 outline-none focus:ring-2 focus:ring-brandBlue"
+                      className="w-full p-4 rounded-2xl bg-white/10 text-white border-2 border-white/20 outline-none focus:ring-4 focus:ring-brandBlue/50 focus:border-brandBlue text-lg"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm text-white/80 mb-2">
+                    <label className="block text-sm text-white/80 mb-2 font-semibold">
                       Email
                     </label>
                     <input
@@ -618,15 +655,15 @@ export default function Simulados() {
                       value={userEmail}
                       onChange={(e) => setUserEmail(e.target.value)}
                       placeholder="O teu email"
-                      className="w-full p-3 rounded-lg bg-white/5 text-white border border-white/10 outline-none focus:ring-2 focus:ring-brandBlue"
+                      className="w-full p-4 rounded-2xl bg-white/10 text-white border-2 border-white/20 outline-none focus:ring-4 focus:ring-brandBlue/50 focus:border-brandBlue text-lg"
                     />
                   </div>
                 </div>
 
-                <div className="flex gap-3">
+                <div className="flex gap-4">
                   <button
                     onClick={() => startSimulado(currentSimulado)}
-                    className="flex-1 bg-brandGreen hover:bg-brandGreen/90 text-black font-semibold px-6 py-3 rounded-lg transition-all duration-200 transform hover:scale-105"
+                    className="flex-1 bg-gradient-to-r from-brandGreen to-brandBlue hover:from-brandGreen/90 hover:to-brandBlue/90 text-white font-bold px-8 py-4 rounded-2xl transition-all duration-300 transform hover:scale-105 shadow-xl text-lg"
                   >
                     Começar Agora
                   </button>
@@ -635,7 +672,7 @@ export default function Simulados() {
                       setView(VIEWS.LIST);
                       setCurrentSimulado(null);
                     }}
-                    className="px-6 py-3 rounded-lg bg-white/5 hover:bg-white/10 transition-all duration-200"
+                    className="px-8 py-4 rounded-2xl bg-white/10 hover:bg-white/20 transition-all duration-300 border-2 border-white/30 font-semibold"
                   >
                     Cancelar
                   </button>
@@ -644,30 +681,28 @@ export default function Simulados() {
             </motion.div>
           )}
 
-          {/* EXAM VIEW */}
           {view === VIEWS.EXAM && currentSimulado && questions.length > 0 && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
             >
-              {/* Header */}
-              <div className="bg-white/10 backdrop-blur-lg p-6 rounded-2xl mb-6 border border-white/20">
-                <div className="flex items-center justify-between flex-wrap gap-4">
+              <div className="bg-gradient-to-br from-white/20 to-white/10 backdrop-blur-xl p-8 rounded-3xl mb-8 border-2 border-white/30 shadow-2xl">
+                <div className="flex items-center justify-between flex-wrap gap-6">
                   <div className="flex-1 min-w-[200px]">
-                    <h2 className="text-2xl font-bold text-white mb-1">
+                    <h2 className="text-3xl font-bold text-white mb-2">
                       {currentSimulado.title}
                     </h2>
-                    <p className="text-sm text-white/70">
+                    <p className="text-lg text-white/80">
                       {currentSimulado.description || currentSimulado.excerpt}
                     </p>
                   </div>
 
                   <div className="text-right">
-                    <div className="text-sm text-white/70 mb-1">
+                    <div className="text-sm text-white/70 mb-2 font-semibold">
                       ⏱️ Tempo restante
                     </div>
                     <div className={`
-                      text-3xl font-mono font-bold
+                      text-5xl font-mono font-extrabold
                       ${timeLeft <= 60 ? 'text-red-400 animate-pulse' : 'text-white'}
                     `}>
                       {formatTime(timeLeft)}
@@ -675,53 +710,49 @@ export default function Simulados() {
                   </div>
                 </div>
 
-                {/* Progress bar */}
-                <div className="mt-4">
-                  <div className="flex justify-between text-sm text-white/70 mb-2">
+                <div className="mt-6">
+                  <div className="flex justify-between text-sm text-white/80 mb-3 font-semibold">
                     <span>Progresso: {answeredCount}/{questions.length}</span>
                     <span>{progressPercentage}%</span>
                   </div>
-                  <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
+                  <div className="w-full h-3 bg-white/20 rounded-full overflow-hidden">
                     <motion.div
-                      className="h-full bg-brandGreen"
+                      className="h-full bg-gradient-to-r from-brandGreen to-brandBlue"
                       initial={{ width: 0 }}
                       animate={{ width: `${progressPercentage}%` }}
-                      transition={{ duration: 0.3 }}
+                      transition={{ duration: 0.5 }}
                     />
                   </div>
                 </div>
               </div>
 
-              {/* Main content */}
-              <div className="grid lg:grid-cols-4 gap-6">
-                {/* Question area */}
-                <div className="lg:col-span-3 space-y-6">
+              <div className="grid lg:grid-cols-4 gap-8">
+                <div className="lg:col-span-3 space-y-8">
                   <AnimatePresence mode="wait">
                     {renderQuestionCard(questions[currentIndex], currentIndex)}
                   </AnimatePresence>
 
-                  {/* Navigation */}
                   <div className="flex justify-between items-center gap-4">
                     <button
                       onClick={goPrev}
                       disabled={currentIndex === 0}
-                      className="px-6 py-3 rounded-lg bg-white/5 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+                      className="px-8 py-4 rounded-2xl bg-white/10 hover:bg-white/20 disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-300 font-bold text-white border-2 border-white/30"
                     >
                       ← Anterior
                     </button>
 
-                    <div className="flex gap-3">
+                    <div className="flex gap-4">
                       {currentIndex < questions.length - 1 ? (
                         <button
                           onClick={goNext}
-                          className="px-6 py-3 rounded-lg bg-brandBlue hover:bg-brandBlue/90 font-semibold transition-all duration-200"
+                          className="px-8 py-4 rounded-2xl bg-gradient-to-r from-brandBlue to-brandGreen hover:from-brandBlue/90 hover:to-brandGreen/90 font-bold transition-all duration-300 shadow-lg text-white"
                         >
                           Próxima →
                         </button>
                       ) : (
                         <button
                           onClick={() => setShowFinishModal(true)}
-                          className="px-6 py-3 rounded-lg bg-brandGreen hover:bg-brandGreen/90 text-black font-bold transition-all duration-200 transform hover:scale-105"
+                          className="px-8 py-4 rounded-2xl bg-gradient-to-r from-brandGreen to-brandBlue hover:from-brandGreen/90 hover:to-brandBlue/90 text-white font-bold transition-all duration-300 transform hover:scale-105 shadow-xl"
                         >
                           Terminar e Enviar ✓
                         </button>
@@ -730,12 +761,10 @@ export default function Simulados() {
                   </div>
                 </div>
 
-                {/* Sidebar */}
                 <aside className="lg:col-span-1">
-                  <div className="bg-white/10 backdrop-blur-lg p-6 rounded-2xl border border-white/20 sticky top-24 space-y-6">
-                    {/* Quick map */}
+                  <div className="bg-gradient-to-br from-white/20 to-white/10 backdrop-blur-xl p-6 rounded-3xl border-2 border-white/30 sticky top-24 space-y-6 shadow-2xl">
                     <div>
-                      <h3 className="text-sm font-semibold text-white/80 mb-3">
+                      <h3 className="text-sm font-bold text-white/90 mb-4">
                         Mapa de Questões
                       </h3>
                       <div className="grid grid-cols-5 gap-2">
@@ -750,13 +779,13 @@ export default function Simulados() {
                               key={q.id}
                               onClick={() => goToQuestion(i)}
                               className={`
-                                aspect-square rounded-lg text-sm font-semibold
-                                transition-all duration-200 transform hover:scale-110
+                                aspect-square rounded-xl text-sm font-bold
+                                transition-all duration-300 transform hover:scale-110
                                 ${isCurrent 
-                                  ? 'bg-brandBlue text-white ring-2 ring-white' 
+                                  ? 'bg-gradient-to-r from-brandBlue to-brandGreen text-white ring-4 ring-white shadow-xl' 
                                   : isAnswered 
-                                    ? 'bg-brandGreen text-black' 
-                                    : 'bg-white/10 text-white hover:bg-white/20'
+                                    ? 'bg-brandGreen text-black shadow-lg' 
+                                    : 'bg-white/20 text-white hover:bg-white/30 border-2 border-white/40'
                                 }
                               `}
                               title={`Questão ${i + 1}`}
@@ -768,32 +797,30 @@ export default function Simulados() {
                       </div>
                     </div>
 
-                    {/* User info */}
-                    <div className="pt-4 border-t border-white/10">
-                      <h3 className="text-sm font-semibold text-white/80 mb-2">
+                    <div className="pt-4 border-t-2 border-white/30">
+                      <h3 className="text-sm font-bold text-white/90 mb-3">
                         Informações
                       </h3>
-                      <div className="space-y-2 text-sm">
+                      <div className="space-y-3 text-sm">
                         <div>
-                          <span className="text-white/60">Nome:</span>
-                          <div className="text-white font-medium">
+                          <span className="text-white/70">Nome:</span>
+                          <div className="text-white font-semibold">
                             {userName || "—"}
                           </div>
                         </div>
                         <div>
-                          <span className="text-white/60">Email:</span>
-                          <div className="text-white font-medium truncate">
+                          <span className="text-white/70">Email:</span>
+                          <div className="text-white font-semibold truncate">
                             {userEmail || "—"}
                           </div>
                         </div>
                       </div>
                     </div>
 
-                    {/* Actions */}
-                    <div className="pt-4 border-t border-white/10">
+                    <div className="pt-4 border-t-2 border-white/30">
                       <button
                         onClick={abortExam}
-                        className="w-full px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold transition-all duration-200"
+                        className="w-full px-4 py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold transition-all duration-300 shadow-lg"
                       >
                         🚪 Abandonar
                       </button>
@@ -804,14 +831,13 @@ export default function Simulados() {
             </motion.div>
           )}
 
-          {/* MODAL DE CONFIRMAÇÃO ELEGANTE */}
           <AnimatePresence>
             {showFinishModal && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
                 onClick={() => setShowFinishModal(false)}
               >
                 <motion.div
@@ -819,21 +845,34 @@ export default function Simulados() {
                   animate={{ scale: 1, opacity: 1 }}
                   exit={{ scale: 0.8, opacity: 0 }}
                   transition={{ type: "spring", duration: 0.5 }}
-                  className="bg-gradient-to-br from-brandBlue/90 to-brandGreen/90 backdrop-blur-xl p-8 rounded-3xl border-2 border-white/30 shadow-2xl max-w-md mx-4"
+                  className="bg-gradient-to-br from-brandBlue/95 to-brandGreen/95 backdrop-blur-xl p-10 rounded-3xl border-2 border-white/40 shadow-2xl max-w-md w-full"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <div className="text-center">
-                    <div className="text-6xl mb-4 animate-bounce">⚠️</div>
-                    <h3 className="text-3xl font-bold text-white mb-3">
+                    <motion.div 
+                      className="text-7xl mb-6"
+                      animate={{ 
+                        scale: [1, 1.2, 1],
+                        rotate: [0, 5, -5, 0]
+                      }}
+                      transition={{ 
+                        duration: 0.8,
+                        repeat: Infinity,
+                        repeatDelay: 1
+                      }}
+                    >
+                      ⚠️
+                    </motion.div>
+                    <h3 className="text-4xl font-extrabold text-white mb-4 drop-shadow-lg">
                       Terminar Simulado?
                     </h3>
-                    <p className="text-white/90 mb-6 text-lg">
+                    <p className="text-white/90 mb-8 text-lg leading-relaxed">
                       Tem certeza que deseja finalizar e enviar suas respostas? Esta ação não pode ser desfeita.
                     </p>
-                    <div className="flex gap-3">
+                    <div className="flex gap-4">
                       <button
                         onClick={() => setShowFinishModal(false)}
-                        className="flex-1 px-6 py-4 rounded-xl bg-white/20 hover:bg-white/30 text-white font-semibold transition-all transform hover:scale-105"
+                        className="flex-1 px-6 py-4 rounded-2xl bg-white/20 hover:bg-white/30 text-white font-bold transition-all transform hover:scale-105 border-2 border-white/40"
                       >
                         Cancelar
                       </button>
@@ -842,7 +881,7 @@ export default function Simulados() {
                           setShowFinishModal(false);
                           finishExam(false);
                         }}
-                        className="flex-1 px-6 py-4 rounded-xl bg-white text-black font-bold transition-all transform hover:scale-105 shadow-lg"
+                        className="flex-1 px-6 py-4 rounded-2xl bg-white text-black font-extrabold transition-all transform hover:scale-105 shadow-2xl"
                       >
                         Confirmar ✓
                       </button>
@@ -853,22 +892,31 @@ export default function Simulados() {
             )}
           </AnimatePresence>
 
-          {/* RESULT VIEW */}
           {view === VIEWS.RESULT && attemptResult && (
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
-              className="max-w-2xl mx-auto"
+              className="max-w-3xl mx-auto"
             >
-              <div className="bg-white/10 backdrop-blur-lg p-8 rounded-2xl border border-white/20 shadow-2xl">
-                <div className="text-center mb-8">
-                  <div className="text-6xl mb-4">
+              <div className="bg-gradient-to-br from-white/20 to-white/10 backdrop-blur-xl p-10 rounded-3xl border-2 border-white/30 shadow-2xl">
+                <div className="text-center mb-10">
+                  <motion.div 
+                    className="text-8xl mb-6"
+                    animate={{ 
+                      scale: [1, 1.1, 1],
+                      rotate: [0, 10, -10, 0]
+                    }}
+                    transition={{ 
+                      duration: 1,
+                      repeat: 3
+                    }}
+                  >
                     {attemptResult.score >= 15 ? "🎉" : attemptResult.score >= 10 ? "👍" : "📚"}
-                  </div>
-                  <h2 className="text-3xl font-bold text-white mb-2">
+                  </motion.div>
+                  <h2 className="text-5xl font-extrabold text-white mb-4 drop-shadow-2xl">
                     {attemptResult.autoFinish ? "Tempo Esgotado!" : "Simulado Concluído!"}
                   </h2>
-                  <p className="text-white/70">
+                  <p className="text-white/90 text-xl">
                     {userName 
                       ? `Obrigado, ${userName}!` 
                       : "Obrigado pela participação!"
@@ -876,57 +924,54 @@ export default function Simulados() {
                   </p>
                 </div>
 
-                {/* Score */}
-                <div className="bg-white/5 p-6 rounded-xl mb-6 text-center">
-                  <div className="text-sm text-white/60 mb-2">
+                <div className="bg-gradient-to-r from-brandGreen/30 to-brandBlue/30 backdrop-blur-md p-8 rounded-2xl mb-8 text-center border-2 border-white/30">
+                  <div className="text-sm text-white/80 mb-3 font-bold uppercase tracking-wider">
                     A Tua Pontuação
                   </div>
-                  <div className="text-6xl font-bold text-white mb-2">
+                  <div className="text-7xl font-extrabold text-white mb-3 drop-shadow-xl">
                     {attemptResult.score.toFixed(2)}
                   </div>
-                  <div className="text-xl text-white/80">
+                  <div className="text-3xl text-white/90 font-bold">
                     / 20 valores
                   </div>
                   
-                  {/* Performance message */}
-                  <div className="mt-4 text-white/70">
+                  <div className="mt-6 text-white/80 text-lg font-semibold">
                     {attemptResult.score >= 15 && "Excelente desempenho! 🌟"}
                     {attemptResult.score >= 10 && attemptResult.score < 15 && "Bom trabalho! Continue a estudar. 📖"}
                     {attemptResult.score < 10 && "Continue a praticar! Não desistas. 💪"}
                   </div>
                 </div>
 
-                {/* Summary */}
-                <div className="bg-white/5 p-6 rounded-xl mb-6">
-                  <h3 className="font-semibold text-white mb-4 flex items-center gap-2">
-                    📊 Resumo
+                <div className="bg-white/10 backdrop-blur-md p-8 rounded-2xl mb-8 border-2 border-white/20">
+                  <h3 className="font-extrabold text-white mb-6 flex items-center gap-3 text-2xl">
+                    📊 Resumo Detalhado
                   </h3>
                   
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <div className="text-white/60">Total de Questões</div>
-                      <div className="text-xl font-bold text-white">
+                  <div className="grid grid-cols-2 gap-6">
+                    <div className="bg-gradient-to-br from-white/10 to-white/5 p-6 rounded-2xl border border-white/30">
+                      <div className="text-white/70 text-sm font-semibold mb-2">Total de Questões</div>
+                      <div className="text-4xl font-extrabold text-white">
                         {questions.length}
                       </div>
                     </div>
                     
-                    <div>
-                      <div className="text-white/60">Questões Acertadas</div>
-                      <div className="text-xl font-bold text-brandGreen">
+                    <div className="bg-gradient-to-br from-brandGreen/20 to-brandGreen/10 p-6 rounded-2xl border border-brandGreen/50">
+                      <div className="text-white/70 text-sm font-semibold mb-2">Questões Acertadas</div>
+                      <div className="text-4xl font-extrabold text-brandGreen">
                         {attemptResult.correctCount || 0}
                       </div>
                     </div>
                     
-                    <div>
-                      <div className="text-white/60">Questões Erradas</div>
-                      <div className="text-xl font-bold text-red-400">
+                    <div className="bg-gradient-to-br from-red-400/20 to-red-400/10 p-6 rounded-2xl border border-red-400/50">
+                      <div className="text-white/70 text-sm font-semibold mb-2">Questões Erradas</div>
+                      <div className="text-4xl font-extrabold text-red-400">
                         {attemptResult.wrongCount || 0}
                       </div>
                     </div>
                     
-                    <div>
-                      <div className="text-white/60">Taxa de Acerto</div>
-                      <div className="text-xl font-bold text-white">
+                    <div className="bg-gradient-to-br from-white/10 to-white/5 p-6 rounded-2xl border border-white/30">
+                      <div className="text-white/70 text-sm font-semibold mb-2">Taxa de Acerto</div>
+                      <div className="text-4xl font-extrabold text-white">
                         {questions.length > 0 
                           ? Math.round((attemptResult.correctCount / questions.length) * 100)
                           : 0}%
@@ -935,32 +980,108 @@ export default function Simulados() {
                   </div>
                 </div>
 
-                {/* Respostas Detalhadas - Mostrar apenas as erradas */}
-                {attemptResult.detailedResults && attemptResult.detailedResults.some(r => !r.isCorrect && r.question.type === "mcq") && (
-                  <div className="bg-white/5 p-6 rounded-xl mb-6">
-                    <h3 className="font-semibold text-white mb-4 flex items-center gap-2">
-                      📝 Revisão - Questões para Estudar
+                {!attemptResult.saved && (
+                  <div className="bg-yellow-500/30 border-2 border-yellow-500/60 p-6 rounded-2xl mb-8 text-white backdrop-blur-md">
+                    <div className="flex items-center gap-3">
+                      <span className="text-3xl">⚠️</span>
+                      <div>
+                        <div className="font-bold mb-1">Aviso</div>
+                        <div className="text-sm">A tua tentativa não foi guardada. Por favor, contacta o suporte se necessário.</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {loading.saving && (
+                  <div className="bg-brandBlue/30 border-2 border-brandBlue/60 p-6 rounded-2xl mb-8 text-white flex items-center gap-4 backdrop-blur-md">
+                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+                    <span className="font-semibold">A guardar a tua tentativa...</span>
+                  </div>
+                )}
+
+                <div className="space-y-4">
+                  <button
+                    onClick={() => {
+                      resetExamState();
+                      setView(VIEWS.LIST);
+                    }}
+                    className="w-full px-10 py-6 rounded-2xl bg-gradient-to-r from-brandBlue to-brandGreen hover:from-brandBlue/90 hover:to-brandGreen/90 text-white font-extrabold text-2xl transition-all duration-300 transform hover:scale-105 shadow-2xl"
+                  >
+                    📋 Ver Outros Simulados
+                  </button>
+
+                  <div className="grid grid-cols-3 gap-4">
+                    <button
+                      onClick={() => setShowCorrections(!showCorrections)}
+                      className="px-6 py-4 rounded-2xl bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-bold transition-all duration-300 transform hover:scale-105 shadow-lg"
+                    >
+                      {showCorrections ? "🔒 Ocultar" : "📝 Ver Correção"}
+                    </button>
+                    
+                    <a
+                      href={getWhatsAppLink()}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-6 py-4 rounded-2xl bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold transition-all duration-300 transform hover:scale-105 shadow-lg text-center"
+                    >
+                      💬 WhatsApp
+                    </a>
+                    
+                    <button
+                      onClick={() => {
+                        setView(VIEWS.USER_INFO);
+                      }}
+                      className="px-6 py-4 rounded-2xl bg-white/20 hover:bg-white/30 transition-all duration-300 font-bold border-2 border-white/40"
+                    >
+                      🔄 Repetir
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-8 pt-8 border-t-2 border-white/30 text-center">
+                  <p className="text-white/70 text-sm mb-2">
+                    💡 <strong>Dica:</strong> Tens sugestões ou opiniões sobre este simulado?
+                  </p>
+                  <p className="text-white/80 text-sm">
+                    Envia-nos feedback pelo WhatsApp para melhorarmos continuamente!
+                  </p>
+                </div>
+              </div>
+
+              <AnimatePresence>
+                {showCorrections && attemptResult.detailedResults && attemptResult.detailedResults.some(r => !r.isCorrect && r.question.type === "mcq") && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -20 }}
+                    className="mt-8 bg-gradient-to-br from-white/20 to-white/10 backdrop-blur-xl p-8 rounded-3xl border-2 border-white/30 shadow-2xl"
+                  >
+                    <h3 className="font-extrabold text-white mb-6 flex items-center gap-3 text-3xl">
+                      📖 Revisão Detalhada
                     </h3>
-                    <p className="text-sm text-white/60 mb-4">
+                    <p className="text-white/80 mb-8 text-lg">
                       Reveja as questões que errou para melhorar seu desempenho:
                     </p>
                     
-                    <div className="space-y-4">
+                    <div className="space-y-6">
                       {attemptResult.detailedResults
                         .map((result, idx) => ({ ...result, originalIndex: idx }))
                         .filter(r => !r.isCorrect && r.question.type === "mcq")
                         .map((result) => (
-                          <div key={result.originalIndex} className="bg-white/5 p-4 rounded-lg border border-red-400/30">
-                            <div className="flex items-start gap-3 mb-3">
-                              <span className="flex-shrink-0 w-8 h-8 rounded-full bg-red-500/20 text-red-400 flex items-center justify-center font-bold text-sm">
+                          <div key={result.originalIndex} className="bg-gradient-to-br from-red-500/20 to-red-600/10 p-6 rounded-2xl border-2 border-red-400/40 backdrop-blur-md">
+                            <div className="flex items-start gap-4 mb-4">
+                              <span className="flex-shrink-0 w-12 h-12 rounded-2xl bg-red-500/30 text-red-400 flex items-center justify-center font-extrabold text-lg border-2 border-red-400/50">
                                 {result.originalIndex + 1}
                               </span>
                               <div className="flex-1">
-                                <p className="text-white font-medium mb-3">
+                                <div className="text-xs text-white/60 font-semibold mb-2 uppercase tracking-wider">
+                                  Questão {result.originalIndex + 1} • {result.question.points} pontos
+                                </div>
+                                <p className="text-white font-bold text-lg mb-4 leading-relaxed">
                                   {result.question.question}
                                 </p>
                                 
-                                <div className="space-y-2">
+                                <div className="space-y-3">
                                   {result.question.choices.map((choice, choiceIdx) => {
                                     const isUserAnswer = result.userAnswer === choiceIdx;
                                     const isCorrectAnswer = result.correctAnswer === choiceIdx;
@@ -968,20 +1089,20 @@ export default function Simulados() {
                                     return (
                                       <div
                                         key={choiceIdx}
-                                        className={`p-3 rounded-lg text-sm ${
+                                        className={`p-4 rounded-xl text-sm font-semibold transition-all ${
                                           isCorrectAnswer
-                                            ? 'bg-brandGreen/20 border-2 border-brandGreen text-white font-semibold'
+                                            ? 'bg-gradient-to-r from-brandGreen to-green-500 border-2 border-white text-white shadow-xl'
                                             : isUserAnswer
-                                            ? 'bg-red-500/20 border-2 border-red-500/50 text-white'
-                                            : 'bg-white/5 text-white/60'
+                                            ? 'bg-gradient-to-r from-red-500 to-red-600 border-2 border-red-300 text-white shadow-lg'
+                                            : 'bg-white/10 text-white/70 border-2 border-white/20'
                                         }`}
                                       >
-                                        <div className="flex items-center gap-2">
-                                          {isCorrectAnswer && <span className="text-brandGreen">✓</span>}
-                                          {isUserAnswer && !isCorrectAnswer && <span className="text-red-400">✗</span>}
-                                          <span>{choice}</span>
-                                          {isCorrectAnswer && <span className="ml-auto text-xs text-brandGreen">(Correta)</span>}
-                                          {isUserAnswer && !isCorrectAnswer && <span className="ml-auto text-xs text-red-400">(Sua resposta)</span>}
+                                        <div className="flex items-center gap-3">
+                                          {isCorrectAnswer && <span className="text-2xl">✓</span>}
+                                          {isUserAnswer && !isCorrectAnswer && <span className="text-2xl">✗</span>}
+                                          <span className="flex-1">{choice}</span>
+                                          {isCorrectAnswer && <span className="text-xs bg-white/20 px-3 py-1 rounded-full">CORRETA</span>}
+                                          {isUserAnswer && !isCorrectAnswer && <span className="text-xs bg-white/20 px-3 py-1 rounded-full">SUA RESPOSTA</span>}
                                         </div>
                                       </div>
                                     );
@@ -992,76 +1113,9 @@ export default function Simulados() {
                           </div>
                         ))}
                     </div>
-                  </div>
+                  </motion.div>
                 )}
-
-                {/* Save status */}
-                {!attemptResult.saved && (
-                  <div className="bg-yellow-500/20 border border-yellow-500/50 p-4 rounded-lg mb-6 text-sm text-white">
-                    ⚠️ A tua tentativa não foi guardada. Por favor, contacta o suporte se necessário.
-                  </div>
-                )}
-
-                {loading.saving && (
-                  <div className="bg-brandBlue/20 border border-brandBlue/50 p-4 rounded-lg mb-6 text-sm text-white flex items-center gap-3">
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                    A guardar a tua tentativa...
-                  </div>
-                )}
-
-                {/* Actions */}
-                <div className="space-y-3">
-                  {/* Botão de Voltar com DESTAQUE */}
-                  <button
-                    onClick={() => {
-                      resetExamState();
-                      setView(VIEWS.LIST);
-                    }}
-                    className="w-full px-8 py-5 rounded-xl bg-gradient-to-r from-brandBlue to-brandGreen hover:from-brandBlue/90 hover:to-brandGreen/90 text-white font-bold text-xl transition-all duration-200 transform hover:scale-105 shadow-2xl"
-                  >
-                    📋 Ver Outros Simulados
-                  </button>
-
-                  {/* Secondary actions */}
-                  <div className="grid grid-cols-2 gap-3">
-                    {/* WhatsApp CTA */}
-                    {shouldShowReserveButton(currentSimulado) ? (
-                      <a
-                        href={getWhatsAppLink()}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="px-6 py-4 rounded-lg bg-brandGreen hover:bg-brandGreen/90 text-black font-bold transition-all duration-200 transform hover:scale-105 text-center"
-                      >
-                        🎓 Reservar Vaga
-                      </a>
-                    ) : (
-                      <a
-                        href={getWhatsAppLink()}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="px-6 py-4 rounded-lg bg-brandGreen hover:bg-brandGreen/90 text-black font-bold transition-all duration-200 transform hover:scale-105 text-center"
-                      >
-                        💬 WhatsApp
-                      </a>
-                    )}
-                    
-                    <button
-                      onClick={() => {
-                        setView(VIEWS.USER_INFO);
-                      }}
-                      className="px-6 py-4 rounded-lg bg-white/10 hover:bg-white/20 transition-all duration-200 font-semibold"
-                    >
-                      🔄 Repetir Simulado
-                    </button>
-                  </div>
-                </div>
-
-                {/* Footer note */}
-                <div className="mt-6 pt-6 border-t border-white/10 text-center text-sm text-white/60">
-                  Os resultados foram registados automaticamente.
-                  {userEmail && " Receberás uma confirmação no email fornecido."}
-                </div>
-              </div>
+              </AnimatePresence>
             </motion.div>
           )}
 

@@ -21,7 +21,7 @@ if (redirect) {
 // 🚀 Renderização principal do app
 createRoot(document.getElementById("root")).render(
   <StrictMode>
-    <BrowserRouter basename="/enfermagem-urnm-plus">
+    <BrowserRouter basename="/enfermagem-urnm-plus/">
       <Routes>
         {/* Roteamento principal */}
         <Route path="/" element={<App />} />
