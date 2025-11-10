@@ -120,6 +120,7 @@ export default function Simulados() {
   
   // Result
   const [attemptResult, setAttemptResult] = useState(null);
+  const [showFinishModal, setShowFinishModal] = useState(false);
   
   // Refs
   const timerRef = useRef(null);
@@ -259,8 +260,39 @@ export default function Simulados() {
       timerRef.current = null;
     }
     
-    // Calculate score
+    // Calculate score and detailed results
     const score = calculateScore(questions, answers);
+    
+    // Calculate correct/wrong answers
+    let correctCount = 0;
+    let wrongCount = 0;
+    const detailedResults = questions.map((q) => {
+      const userAnswer = answers[q.id];
+      let isCorrect = false;
+      
+      if (q.type === "mcq") {
+        if (userAnswer !== undefined && userAnswer !== null) {
+          isCorrect = typeof q.correct === "number"
+            ? Number(userAnswer) === Number(q.correct)
+            : String(userAnswer).trim() === String(q.correct).trim();
+          
+          if (isCorrect) {
+            correctCount++;
+          } else {
+            wrongCount++;
+          }
+        } else {
+          wrongCount++; // Não respondida conta como errada
+        }
+      }
+      
+      return {
+        question: q,
+        userAnswer,
+        isCorrect,
+        correctAnswer: q.type === "mcq" ? q.correct : null
+      };
+    });
     
     // Save attempt
     const savedAttempt = await saveAttempt(
@@ -276,7 +308,10 @@ export default function Simulados() {
     setAttemptResult({
       score,
       saved: savedAttempt,
-      autoFinish
+      autoFinish,
+      correctCount,
+      wrongCount,
+      detailedResults
     });
     
     setView(VIEWS.RESULT);
@@ -685,12 +720,7 @@ export default function Simulados() {
                         </button>
                       ) : (
                         <button
-                          onClick={() => {
-                            const confirmed = window.confirm(
-                              "Deseja terminar o simulado e submeter as respostas?"
-                            );
-                            if (confirmed) finishExam(false);
-                          }}
+                          onClick={() => setShowFinishModal(true)}
                           className="px-6 py-3 rounded-lg bg-brandGreen hover:bg-brandGreen/90 text-black font-bold transition-all duration-200 transform hover:scale-105"
                         >
                           Terminar e Enviar ✓
@@ -774,6 +804,55 @@ export default function Simulados() {
             </motion.div>
           )}
 
+          {/* MODAL DE CONFIRMAÇÃO ELEGANTE */}
+          <AnimatePresence>
+            {showFinishModal && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+                onClick={() => setShowFinishModal(false)}
+              >
+                <motion.div
+                  initial={{ scale: 0.8, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0.8, opacity: 0 }}
+                  transition={{ type: "spring", duration: 0.5 }}
+                  className="bg-gradient-to-br from-brandBlue/90 to-brandGreen/90 backdrop-blur-xl p-8 rounded-3xl border-2 border-white/30 shadow-2xl max-w-md mx-4"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="text-center">
+                    <div className="text-6xl mb-4 animate-bounce">⚠️</div>
+                    <h3 className="text-3xl font-bold text-white mb-3">
+                      Terminar Simulado?
+                    </h3>
+                    <p className="text-white/90 mb-6 text-lg">
+                      Tem certeza que deseja finalizar e enviar suas respostas? Esta ação não pode ser desfeita.
+                    </p>
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => setShowFinishModal(false)}
+                        className="flex-1 px-6 py-4 rounded-xl bg-white/20 hover:bg-white/30 text-white font-semibold transition-all transform hover:scale-105"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowFinishModal(false);
+                          finishExam(false);
+                        }}
+                        className="flex-1 px-6 py-4 rounded-xl bg-white text-black font-bold transition-all transform hover:scale-105 shadow-lg"
+                      >
+                        Confirmar ✓
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {/* RESULT VIEW */}
           {view === VIEWS.RESULT && attemptResult && (
             <motion.div
@@ -832,27 +911,89 @@ export default function Simulados() {
                     </div>
                     
                     <div>
-                      <div className="text-white/60">Respondidas</div>
-                      <div className="text-xl font-bold text-white">
-                        {answeredCount}
+                      <div className="text-white/60">Questões Acertadas</div>
+                      <div className="text-xl font-bold text-brandGreen">
+                        {attemptResult.correctCount || 0}
                       </div>
                     </div>
                     
                     <div>
-                      <div className="text-white/60">Taxa de Conclusão</div>
-                      <div className="text-xl font-bold text-white">
-                        {progressPercentage}%
+                      <div className="text-white/60">Questões Erradas</div>
+                      <div className="text-xl font-bold text-red-400">
+                        {attemptResult.wrongCount || 0}
                       </div>
                     </div>
                     
                     <div>
-                      <div className="text-white/60">Estado</div>
+                      <div className="text-white/60">Taxa de Acerto</div>
                       <div className="text-xl font-bold text-white">
-                        {attemptResult.saved ? "✓ Guardado" : "⚠️ Não guardado"}
+                        {questions.length > 0 
+                          ? Math.round((attemptResult.correctCount / questions.length) * 100)
+                          : 0}%
                       </div>
                     </div>
                   </div>
                 </div>
+
+                {/* Respostas Detalhadas - Mostrar apenas as erradas */}
+                {attemptResult.detailedResults && attemptResult.detailedResults.some(r => !r.isCorrect && r.question.type === "mcq") && (
+                  <div className="bg-white/5 p-6 rounded-xl mb-6">
+                    <h3 className="font-semibold text-white mb-4 flex items-center gap-2">
+                      📝 Revisão - Questões para Estudar
+                    </h3>
+                    <p className="text-sm text-white/60 mb-4">
+                      Reveja as questões que errou para melhorar seu desempenho:
+                    </p>
+                    
+                    <div className="space-y-4">
+                      {attemptResult.detailedResults
+                        .map((result, idx) => ({ ...result, originalIndex: idx }))
+                        .filter(r => !r.isCorrect && r.question.type === "mcq")
+                        .map((result) => (
+                          <div key={result.originalIndex} className="bg-white/5 p-4 rounded-lg border border-red-400/30">
+                            <div className="flex items-start gap-3 mb-3">
+                              <span className="flex-shrink-0 w-8 h-8 rounded-full bg-red-500/20 text-red-400 flex items-center justify-center font-bold text-sm">
+                                {result.originalIndex + 1}
+                              </span>
+                              <div className="flex-1">
+                                <p className="text-white font-medium mb-3">
+                                  {result.question.question}
+                                </p>
+                                
+                                <div className="space-y-2">
+                                  {result.question.choices.map((choice, choiceIdx) => {
+                                    const isUserAnswer = result.userAnswer === choiceIdx;
+                                    const isCorrectAnswer = result.correctAnswer === choiceIdx;
+                                    
+                                    return (
+                                      <div
+                                        key={choiceIdx}
+                                        className={`p-3 rounded-lg text-sm ${
+                                          isCorrectAnswer
+                                            ? 'bg-brandGreen/20 border-2 border-brandGreen text-white font-semibold'
+                                            : isUserAnswer
+                                            ? 'bg-red-500/20 border-2 border-red-500/50 text-white'
+                                            : 'bg-white/5 text-white/60'
+                                        }`}
+                                      >
+                                        <div className="flex items-center gap-2">
+                                          {isCorrectAnswer && <span className="text-brandGreen">✓</span>}
+                                          {isUserAnswer && !isCorrectAnswer && <span className="text-red-400">✗</span>}
+                                          <span>{choice}</span>
+                                          {isCorrectAnswer && <span className="ml-auto text-xs text-brandGreen">(Correta)</span>}
+                                          {isUserAnswer && !isCorrectAnswer && <span className="ml-auto text-xs text-red-400">(Sua resposta)</span>}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Save status */}
                 {!attemptResult.saved && (
@@ -870,46 +1011,47 @@ export default function Simulados() {
 
                 {/* Actions */}
                 <div className="space-y-3">
-                  {/* Primary CTA based on simulado type */}
-                  {shouldShowReserveButton(currentSimulado) ? (
-                    <a
-                      href={getWhatsAppLink()}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block w-full text-center px-6 py-4 rounded-lg bg-brandGreen hover:bg-brandGreen/90 text-black font-bold text-lg transition-all duration-200 transform hover:scale-105"
-                    >
-                      🎓 Reservar Vaga no Curso
-                    </a>
-                  ) : (
-                    <a
-                      href={getWhatsAppLink()}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block w-full text-center px-6 py-4 rounded-lg bg-brandBlue hover:bg-brandBlue/90 text-white font-bold text-lg transition-all duration-200 transform hover:scale-105"
-                    >
-                      💬 Falar Connosco no WhatsApp
-                    </a>
-                  )}
+                  {/* Botão de Voltar com DESTAQUE */}
+                  <button
+                    onClick={() => {
+                      resetExamState();
+                      setView(VIEWS.LIST);
+                    }}
+                    className="w-full px-8 py-5 rounded-xl bg-gradient-to-r from-brandBlue to-brandGreen hover:from-brandBlue/90 hover:to-brandGreen/90 text-white font-bold text-xl transition-all duration-200 transform hover:scale-105 shadow-2xl"
+                  >
+                    📋 Ver Outros Simulados
+                  </button>
 
                   {/* Secondary actions */}
                   <div className="grid grid-cols-2 gap-3">
-                    <button
-                      onClick={() => {
-                        resetExamState();
-                        setView(VIEWS.LIST);
-                      }}
-                      className="px-6 py-3 rounded-lg bg-white/5 hover:bg-white/10 transition-all duration-200"
-                    >
-                      📋 Ver Outros Simulados
-                    </button>
+                    {/* WhatsApp CTA */}
+                    {shouldShowReserveButton(currentSimulado) ? (
+                      <a
+                        href={getWhatsAppLink()}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-6 py-4 rounded-lg bg-brandGreen hover:bg-brandGreen/90 text-black font-bold transition-all duration-200 transform hover:scale-105 text-center"
+                      >
+                        🎓 Reservar Vaga
+                      </a>
+                    ) : (
+                      <a
+                        href={getWhatsAppLink()}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-6 py-4 rounded-lg bg-brandGreen hover:bg-brandGreen/90 text-black font-bold transition-all duration-200 transform hover:scale-105 text-center"
+                      >
+                        💬 WhatsApp
+                      </a>
+                    )}
                     
                     <button
                       onClick={() => {
                         setView(VIEWS.USER_INFO);
                       }}
-                      className="px-6 py-3 rounded-lg bg-white/5 hover:bg-white/10 transition-all duration-200"
+                      className="px-6 py-4 rounded-lg bg-white/10 hover:bg-white/20 transition-all duration-200 font-semibold"
                     >
-                      🔄 Repetir Este Simulado
+                      🔄 Repetir Simulado
                     </button>
                   </div>
                 </div>
